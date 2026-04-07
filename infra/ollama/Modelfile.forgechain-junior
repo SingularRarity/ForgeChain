@@ -1,0 +1,33 @@
+# ForgeChain junior agent model
+# Base: qwen2.5-coder:7b (best small coding model)
+# Build: docker exec -it forgechain-ollama-1 ollama create forgechain-junior -f /modelfiles/Modelfile.forgechain-junior
+
+FROM qwen2.5-coder:7b
+
+# Lower temperature for code tasks — we want deterministic patches, not creativity
+PARAMETER temperature 0.1
+
+# Keep top_p narrow for code
+PARAMETER top_p 0.9
+
+# 8k context — enough for most single-file patches without OOM on consumer hardware
+PARAMETER num_ctx 8192
+
+# Stop at these tokens so the model doesn't ramble after the diff
+PARAMETER stop "```"
+PARAMETER stop "---END---"
+PARAMETER stop "<|im_end|>"
+
+# Repeat penalty prevents copy-paste loops in generated diffs
+PARAMETER repeat_penalty 1.15
+
+SYSTEM """You are ForgeChain Junior, a precise code assistant.
+
+Rules:
+- Output ONLY unified diff patches. No prose, no markdown fences around the diff.
+- If the task is too complex or ambiguous, set confidence=low immediately.
+- Each patch must compile and pass basic syntax checks.
+- Never hallucinate file paths — use exactly the paths mentioned in the task.
+- Prefer the simplest correct implementation over a clever one.
+- One function, one responsibility. No premature abstractions.
+"""
