@@ -30,6 +30,7 @@ from learning.collector import Collector
 from quant.coverage import CoverageTracker
 from quant.ema import EMATracker
 from quant.bandit import BanditRouter
+from notify import dispatcher as _notifier
 
 router = APIRouter(prefix="/forgechain", tags=["forgechain"])
 
@@ -206,6 +207,18 @@ async def approve_job(
         pass  # never block approval on learning pipeline failure
 
     data = await sm.get(task_id)
+
+    try:
+        await _notifier.notify(
+            "job_approved",
+            task_id=task_id,
+            role=data.get("role", "") if data else "",
+            reviewer=body.reviewer,
+            comment=body.comment or "",
+        )
+    except Exception:
+        pass
+
     return _serialize_job(data or {})
 
 
@@ -241,6 +254,18 @@ async def reject_job(
         pass  # never block rejection on learning pipeline failure
 
     data = await sm.get(task_id)
+
+    try:
+        await _notifier.notify(
+            "job_rejected",
+            task_id=task_id,
+            role=data.get("role", "") if data else "",
+            reviewer=body.reviewer,
+            reason=body.comment or "",
+        )
+    except Exception:
+        pass
+
     return _serialize_job(data or {})
 
 

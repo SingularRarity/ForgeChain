@@ -35,6 +35,7 @@ from providers.tiered_router import (
 from providers.token_ledger import TokenLedger
 from dspy_prompts import ForgeChainModule
 from knowledge import Retriever
+from notify import dispatcher as _notifier
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +210,14 @@ class BaseWorker(ABC):
 
             await self._sm.transition(task_id, TaskState.REVIEW, extra={"pr_url": pr_url})
             logger.info("[%s] Task %s → REVIEW (tier=%s)", self.role, task_id, route.tier)
+            asyncio.create_task(_notifier.notify(
+                "job_review",
+                task_id=task_id,
+                role=self.role,
+                tier=route.tier,
+                pr_url=pr_url,
+                description=task.get("description", ""),
+            ))
 
         except Exception as exc:
             logger.exception("[%s] Task %s failed", self.role, task_id)
