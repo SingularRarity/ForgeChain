@@ -1,0 +1,20 @@
+[project]
+name = "forgechain-workers"
+version = "0.1.0"
+description = "ForgeChain role worker agents"
+requires-python = ">=3.12"
+
+dependencies = [
+    "celery[redis]>=5.4",
+    "redis>=5.0",
+    "anthropic>=0.40",
+    "google-generativeai>=0.8",
+    "openai>=1.50",          # Used by Grok + Ollama adapters
+    "PyGithub>=2.3",
+    "cryptography>=42.0",
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-exporter-otlp>=1.25",
+    "opentelemetry-instrumentation-celery>=0.46b0",
+    "dspy-ai>=2.5",
+    "asyncpg>=0.29",           # optional Postgres ledger writes
+]
