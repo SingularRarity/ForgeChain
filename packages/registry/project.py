@@ -39,6 +39,8 @@ class Project:
     repo_path: str                # Absolute local path to the codebase (empty if remote-only)
     created_at: float
     active: bool = True
+    github_token: str = ""        # Per-project PAT (write-only — never returned by API)
+    github_repo: str = ""         # Override for the GitHub org/repo when different from repo
 
     @property
     def kb_path(self) -> str:
@@ -74,6 +76,8 @@ class ProjectRegistry:
         repo: str = "",
         repo_path: str = "",
         project_id: str | None = None,
+        github_token: str = "",
+        github_repo: str = "",
     ) -> Project:
         """Register a new project, create its directory structure, return it."""
         pid = project_id or _slug(name)
@@ -86,6 +90,8 @@ class ProjectRegistry:
             repo=repo,
             repo_path=str(Path(repo_path).resolve()) if repo_path else "",
             created_at=now,
+            github_token=github_token,
+            github_repo=github_repo or repo,  # default to repo if not explicitly overridden
         )
 
         # Ensure KB and skills directories exist
@@ -130,6 +136,25 @@ class ProjectRegistry:
                 updates["repo"] = repo
             if repo_path:
                 updates["repo_path"] = repo_path
+            if updates:
+                await redis.hset(_project_key(project_id), mapping=updates)
+        finally:
+            await redis.aclose()
+
+    async def update_github(
+        self,
+        project_id: str,
+        github_token: str = "",
+        github_repo: str = "",
+    ) -> None:
+        """Set or rotate per-project GitHub credentials without re-registering."""
+        redis = aioredis.from_url(self._redis_url, decode_responses=True)
+        try:
+            updates: dict[str, str] = {}
+            if github_token:
+                updates["github_token"] = github_token
+            if github_repo:
+                updates["github_repo"] = github_repo
             if updates:
                 await redis.hset(_project_key(project_id), mapping=updates)
         finally:
@@ -211,6 +236,8 @@ def _deserialize(data: dict[str, str]) -> Project | None:
             repo_path=data.get("repo_path", ""),
             created_at=float(data.get("created_at", 0)),
             active=data.get("active", "True") == "True",
+            github_token=data.get("github_token", ""),
+            github_repo=data.get("github_repo", ""),
         )
     except (KeyError, ValueError):
         return None

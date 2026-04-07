@@ -55,8 +55,9 @@ class BaseWorker(ABC):
         self._sm        = StateMachine(self._redis_url)
         self._ledger    = TokenLedger(self._redis_url)
         self._retriever = Retriever(self.role)
-        self._github_token = os.getenv("GITHUB_TOKEN")
-        self._repo_name    = os.getenv("GITHUB_REPO")
+        # Global fallbacks — overridden per-project at task run time via registry
+        self._github_token = os.getenv("GITHUB_TOKEN", "")
+        self._repo_name    = os.getenv("GITHUB_REPO", "")
 
     # ------------------------------------------------------------------ #
     # Subclass contract                                                    #
@@ -234,10 +235,12 @@ class BaseWorker(ABC):
                 except Exception as exc:
                     logger.warning("[%s] Sandbox runner error (non-fatal): %s", self.role, exc)
 
-            # 8. GitHub PR
+            # 8. GitHub PR — resolve per-project credentials, fall back to global env
             pr_url = ""
-            if self._github_token and self._repo_name and patch:
-                pr_url = self._open_pr(task_id, task, patch, route)
+            if patch:
+                gh_token, gh_repo = await self._resolve_github_creds(task.get("project"))
+                if gh_token and gh_repo:
+                    pr_url = self._open_pr(task_id, task, patch, route, gh_token, gh_repo)
 
             await self._sm.transition(task_id, TaskState.REVIEW, extra={"pr_url": pr_url})
             logger.info("[%s] Task %s → REVIEW (tier=%s)", self.role, task_id, route.tier)
@@ -341,16 +344,50 @@ class BaseWorker(ABC):
         except Exception:
             return None
 
+    async def _resolve_github_creds(
+        self, project_id: Optional[str]
+    ) -> tuple[str, str]:
+        """Return (github_token, github_repo) for this task.
+
+        Priority:
+          1. Per-project credentials stored in the registry (best: scoped PAT)
+          2. Global GITHUB_TOKEN / GITHUB_REPO env vars (fallback)
+        """
+        if project_id:
+            try:
+                import redis.asyncio as _aioredis
+                r = _aioredis.from_url(self._redis_url, decode_responses=True)
+                try:
+                    data = await r.hmget(
+                        f"forgechain:registry:project:{project_id}",
+                        "github_token", "github_repo",
+                    )
+                    token = data[0] or ""
+                    repo  = data[1] or ""
+                    if token and repo:
+                        return token, repo
+                    # Partial: one field set, use the other from global env
+                    return token or self._github_token, repo or self._repo_name
+                finally:
+                    await r.aclose()
+            except Exception:
+                pass
+        return self._github_token, self._repo_name
+
     def _open_pr(
         self,
         task_id: str,
         task: dict[str, Any],
         patch: str,
         route: TierRoute,
+        github_token: str = "",
+        github_repo: str = "",
     ) -> str:
+        token = github_token or self._github_token
+        repo_name = github_repo or self._repo_name
         try:
-            gh   = Github(self._github_token)
-            repo = gh.get_repo(self._repo_name)
+            gh   = Github(token)
+            repo = gh.get_repo(repo_name)
             branch = f"forgechain/{self.role}/{task_id[:8]}"
             base_sha = repo.get_branch(repo.default_branch).commit.sha
             repo.create_git_ref(ref=f"refs/heads/{branch}", sha=base_sha)

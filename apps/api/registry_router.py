@@ -53,6 +53,27 @@ class ProjectCreateRequest(BaseModel):
         pattern=r"^[a-z0-9_]{1,40}$",
         description="Custom project_id slug; auto-generated from name if omitted",
     )
+    github_token: Optional[str] = Field(
+        None,
+        description=(
+            "Per-project GitHub PAT (repo scope: read + PR create). "
+            "Stored in Redis, never returned by the API. "
+            "Falls back to global GITHUB_TOKEN env var if not set."
+        ),
+    )
+    github_repo: Optional[str] = Field(
+        None,
+        description=(
+            "GitHub org/repo for this project (e.g. 'acme/boli'). "
+            "Defaults to the detected git remote if omitted. "
+            "Falls back to global GITHUB_REPO env var if not set."
+        ),
+    )
+
+
+class ProjectGithubRequest(BaseModel):
+    github_token: Optional[str] = Field(None, description="New GitHub PAT to store for this project")
+    github_repo: Optional[str] = Field(None, description="New GitHub org/repo for this project")
 
 
 class ScanRequest(BaseModel):
@@ -154,6 +175,8 @@ async def create_project(
         repo=effective_repo,
         repo_path=effective_repo_path,
         project_id=body.project_id,
+        github_token=body.github_token or "",
+        github_repo=body.github_repo or "",
     )
 
     if body.repo_path:
@@ -233,6 +256,37 @@ async def delete_project(
     removed = await registry.delete(project_id)
     if not removed:
         raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found")
+
+
+@router.patch(
+    "/projects/{project_id}/github",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Set or rotate per-project GitHub credentials",
+)
+async def update_project_github(
+    project_id: str,
+    body: ProjectGithubRequest,
+    registry: ProjectRegistry = Depends(_registry),
+) -> None:
+    """Store or rotate the GitHub PAT and/or target repo for a project.
+
+    The token is write-only — it is never returned by any API endpoint.
+    Use this to set credentials after registration, or to rotate a token
+    without deleting and re-creating the project.
+
+    Example — set credentials for Boli:
+        PATCH /forgechain/projects/boli/github
+        { "github_token": "ghp_...", "github_repo": "acme/boli" }
+    """
+    if not await registry.exists(project_id):
+        raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found")
+    if not body.github_token and not body.github_repo:
+        raise HTTPException(status_code=400, detail="Provide at least one of github_token or github_repo")
+    await registry.update_github(
+        project_id,
+        github_token=body.github_token or "",
+        github_repo=body.github_repo or "",
+    )
 
 
 @router.post(
