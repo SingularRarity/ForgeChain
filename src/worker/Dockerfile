@@ -31,14 +31,14 @@ RUN pip install uv
 WORKDIR /app
 
 # Copy dependency files
-COPY src/worker/pyproject.toml src/worker/uv.lock* ./
+COPY src/worker/pyproject.toml ./
 
 # Create cache directory in /tmp (which has more space and is ephemeral)
 RUN mkdir -p /tmp/uv-cache && \
     chmod 777 /tmp/uv-cache
 
 # Install dependencies using /tmp for cache
-RUN UV_CACHE_DIR=/tmp/uv-cache uv sync --frozen
+RUN UV_CACHE_DIR=/tmp/uv-cache uv sync --no-dev
 
 # Copy application code
 COPY src/worker/ ./
