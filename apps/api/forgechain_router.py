@@ -44,6 +44,7 @@ class JobCreateRequest(BaseModel):
     jira_ticket: Optional[str] = Field(None, description="JIRA ticket body for BA role")
     context: Optional[str] = Field(None, max_length=8000)
     pii_policy: Literal["strict", "permissive"] = "strict"
+    project: Optional[str] = Field(None, description="Project ID for multi-app scoping; workers load project KB + shared KB")
 
 
 class JobResponse(BaseModel):
@@ -158,6 +159,8 @@ async def create_job(
         metadata["jira_ticket"] = body.jira_ticket
     if body.context:
         metadata["context"] = body.context
+    if body.project:
+        metadata["project"] = body.project
 
     await sm.create(task_id, metadata)
 

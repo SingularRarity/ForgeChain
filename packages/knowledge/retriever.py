@@ -17,12 +17,29 @@ _MAX_CONTEXT_CHARS = 3000   # cap injected context to stay within Ollama's budge
 
 
 class Retriever:
-    """Retrieve relevant chunks for a (role, query) pair."""
+    """Retrieve relevant chunks for a (role, query) pair.
 
-    def __init__(self, role: str) -> None:
+    When project_id is provided, results are merged from two sources:
+      1. The project-specific KB  → {FORGECHAIN_PROJECTS_PATH}/{project_id}/knowledge_base/
+      2. The shared KB            → {FORGECHAIN_PROJECTS_PATH}/shared/knowledge_base/
+    This union retrieval gives every project access to both its own knowledge
+    and patterns promoted from other projects.
+
+    Without project_id: uses the global KB at FORGECHAIN_KB_PATH (original behaviour).
+    """
+
+    def __init__(self, role: str, project_id: str | None = None) -> None:
         self.role = role
-        self._store = KnowledgeStore(role)
+        self.project_id = project_id
         self._redis_url = os.getenv("REDIS_URL")
+
+        if project_id:
+            self._stores = [
+                KnowledgeStore(role, project_id=project_id),   # project-specific
+                KnowledgeStore(role, project_id="shared"),     # shared universal
+            ]
+        else:
+            self._stores = [KnowledgeStore(role)]              # original behaviour
 
     def retrieve(
         self,
@@ -31,12 +48,30 @@ class Retriever:
         top_k: int = _DEFAULT_TOP_K,
         min_score: float = _DEFAULT_MIN_SCORE,
     ) -> list[dict[str, Any]]:
-        """Return ranked chunks most relevant to *query*."""
-        if self._store.count() == 0:
+        """Return ranked chunks most relevant to *query*.
+
+        When multiple stores are configured (project + shared), results from
+        both are merged, deduplicated by text content, and re-ranked by score.
+        """
+        active_stores = [s for s in self._stores if s.count() > 0]
+        if not active_stores:
             self._record_coverage_async(query, [])
             return []
+
         vec = embed_query(query)
-        hits = self._store.query(vec, top_k=top_k, min_score=min_score)
+        seen_texts: set[str] = set()
+        all_hits: list[dict[str, Any]] = []
+
+        for store in active_stores:
+            for hit in store.query(vec, top_k=top_k, min_score=min_score):
+                if hit["text"] not in seen_texts:
+                    seen_texts.add(hit["text"])
+                    all_hits.append(hit)
+
+        # Re-rank merged results by score, cap at top_k
+        all_hits.sort(key=lambda h: h["score"], reverse=True)
+        hits = all_hits[:top_k]
+
         self._record_coverage_async(query, [h["score"] for h in hits])
         return hits
 
@@ -90,4 +125,4 @@ class Retriever:
         return "\n\n---\n\n".join(parts)
 
     def has_knowledge(self) -> bool:
-        return self._store.count() > 0
+        return any(s.count() > 0 for s in self._stores)

@@ -42,6 +42,13 @@ try:
 except ImportError:
     _PRD_ENABLED = False
 
+# Multi-app Registry router (optional)
+try:
+    from forgechain.registry_router import router as registry_router
+    _REGISTRY_ENABLED = True
+except ImportError:
+    _REGISTRY_ENABLED = False
+
 
 # Create Celery app for worker communication (broadcast commands)
 from celery import Celery
@@ -174,6 +181,9 @@ if _FORGECHAIN_ENABLED:
 
 if _PRD_ENABLED:
     app.include_router(prd_router)
+
+if _REGISTRY_ENABLED:
+    app.include_router(registry_router)
 
 
 @app.get("/")

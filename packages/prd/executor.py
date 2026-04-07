@@ -48,11 +48,11 @@ class WaveExecutor:
     def __init__(self, redis_url: str) -> None:
         self._redis_url = redis_url
 
-    async def execute(self, graph: TaskGraph) -> None:
+    async def execute(self, graph: TaskGraph, project_id: str | None = None) -> None:
         """Entry point — runs all waves sequentially, waves run jobs in parallel.
 
-        This is designed to be called as an asyncio background task (fire and
-        forget from the route handler).
+        project_id: optional project scope forwarded to every enqueued job so
+                    workers load the project KB + shared KB during retrieval.
         """
         redis = aioredis.from_url(self._redis_url, decode_responses=True)
         sm = StateMachine(self._redis_url)
@@ -87,7 +87,9 @@ class WaveExecutor:
                         continue
                     is_critical = prd_task_id in critical_set
                     job_id = await self._enqueue_job(
-                        redis, sm, graph.prd_id, task, priority=is_critical
+                        redis, sm, graph.prd_id, task,
+                        priority=is_critical,
+                        project_id=project_id,
                     )
                     task_job_map[prd_task_id] = job_id
                     wave_job_ids.append(job_id)
@@ -129,6 +131,7 @@ class WaveExecutor:
         task: PRDTask,
         *,
         priority: bool = False,
+        project_id: str | None = None,
     ) -> str:
         """Create a ForgeChain job for a single PRD task and push to queue.
 
@@ -154,6 +157,10 @@ class WaveExecutor:
             metadata["tier"] = "junior"
         elif task.complexity == "complex":
             metadata["tier"] = "senior"
+
+        # Forward project scope so workers use project KB + shared KB
+        if project_id:
+            metadata["project"] = project_id
 
         await sm.create(job_id, metadata)
 

@@ -74,8 +74,14 @@ class BaseWorker(ABC):
         """
         description = task.get("description", "")
 
-        # RAG: retrieve relevant chunks from the role's knowledge base
-        retrieved_knowledge = self._retriever.retrieve_as_context(description)
+        # RAG: use project-scoped retriever if a project is attached to this task
+        project_id = task.get("project") or None
+        retriever = (
+            Retriever(self.role, project_id=project_id)
+            if project_id
+            else self._retriever
+        )
+        retrieved_knowledge = retriever.retrieve_as_context(description)
         if retrieved_knowledge:
             logger.info(
                 "[%s] RAG: injected %d chars of knowledge into prompt",
