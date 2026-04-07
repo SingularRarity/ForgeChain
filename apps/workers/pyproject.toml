@@ -17,4 +17,6 @@ dependencies = [
     "opentelemetry-instrumentation-celery>=0.46b0",
     "dspy-ai>=2.5",
     "asyncpg>=0.29",           # optional Postgres ledger writes
+    "chromadb>=0.5",           # local vector store for RAG
+    "httpx>=0.27",             # used by embedder + ingester URL fetching
 ]
