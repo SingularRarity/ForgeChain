@@ -34,6 +34,7 @@ from providers.tiered_router import (
 )
 from providers.token_ledger import TokenLedger
 from dspy_prompts import ForgeChainModule
+from knowledge import Retriever
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class BaseWorker(ABC):
         self._vault     = PIIVault()
         self._sm        = StateMachine(self._redis_url)
         self._ledger    = TokenLedger(self._redis_url)
+        self._retriever = Retriever(self.role)
         self._github_token = os.getenv("GITHUB_TOKEN")
         self._repo_name    = os.getenv("GITHUB_REPO")
 
@@ -65,12 +67,27 @@ class BaseWorker(ABC):
     def build_inputs(self, task: dict[str, Any], tier: str) -> dict[str, Any]:
         """Build DSPy input kwargs for the given tier signature.
 
-        Subclasses should override to add tier-specific fields like
-        `existing_context` (required by mid/senior signatures).
+        Retrieves relevant knowledge from the local ChromaDB knowledge base
+        and injects it as `retrieved_knowledge` into every signature tier.
+        The retrieval query is the task description — same text the model
+        will work on, so cosine similarity finds the most applicable docs.
         """
-        base = {
-            "task_description": task.get("description", ""),
-            "role_context": self.role_context(),
+        description = task.get("description", "")
+
+        # RAG: retrieve relevant chunks from the role's knowledge base
+        retrieved_knowledge = self._retriever.retrieve_as_context(description)
+        if retrieved_knowledge:
+            logger.info(
+                "[%s] RAG: injected %d chars of knowledge into prompt",
+                self.role, len(retrieved_knowledge),
+            )
+        else:
+            logger.debug("[%s] RAG: no knowledge base hits for this task", self.role)
+
+        base: dict[str, Any] = {
+            "task_description":    description,
+            "role_context":        self.role_context(),
+            "retrieved_knowledge": retrieved_knowledge,
         }
         if tier in ("mid", "senior"):
             base["existing_context"] = task.get("context", "")
@@ -80,7 +97,7 @@ class BaseWorker(ABC):
             base["project_context"] = task.get("context", "")
         # QA role
         if self.role == "qa_backend":
-            base["feature_description"] = task.get("description", "")
+            base["feature_description"] = description
             base["implementation_hint"] = task.get("context", "")
         return base
 

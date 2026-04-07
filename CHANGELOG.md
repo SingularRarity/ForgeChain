@@ -9,6 +9,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.0] — 2026-04-07 — RAG knowledge base for local Ollama enrichment
+
+### Added
+- `packages/knowledge/` — full RAG pipeline:
+  - `chunker.py` — Markdown-aware text splitter (heading-preserving, sliding
+    window, configurable max_chars/overlap to fit nomic-embed-text's 2048
+    token context window).
+  - `embedder.py` — calls Ollama `/api/embed` with `nomic-embed-text`; local,
+    free, retries on transient failures.
+  - `store.py` — `KnowledgeStore`: ChromaDB persistent collections, one per
+    agent role. Cosine similarity, upsert-idempotent by content hash, 30-day TTL.
+  - `retriever.py` — `Retriever.retrieve_as_context()`: embeds the task
+    description, fetches top-5 chunks above 0.30 similarity, formats them
+    as a citation block capped at 3000 chars (stays within Ollama budget).
+  - `ingester.py` — `Ingester`: ingest local `.md`/`.txt`/`.rst` files,
+    HTTP/HTTPS URLs (HTML stripped), or full directory trees.
+  - `cli.py` — `python -m knowledge.cli` with `ingest file|url|dir`,
+    `status`, `delete`, `list-roles` subcommands.
+- `skills/` directory — knowledge base source files:
+  - `README.md` — usage guide and recommended doc URLs per role.
+  - `shared.md` — project conventions applied to all roles.
+  - `backend_dev.md` — FastAPI, Pydantic v2, async Redis, Celery patterns.
+  - `frontend_dev.md` — React 18, TypeScript, Tailwind, React Query, Zustand.
+  - `qa_backend.md` — pytest-asyncio, httpx.AsyncClient, respx, testcontainers.
+  - `db_eng.md` — Alembic migrations, SQLAlchemy 2.0 async, index strategy.
+  - `sre.md` — Dockerfile conventions, docker-compose, GitHub Actions, secrets.
+
+### Changed
+- All DSPy signatures gain a `retrieved_knowledge` input field —
+  `JuniorCodeSignature`, `MidCodeSignature`, `SeniorCodeSignature`,
+  `BATicketSignature`, `QATestSignature`.
+- `BaseWorker.build_inputs()` now calls `Retriever.retrieve_as_context()`
+  on every task before building DSPy inputs. If the knowledge base is empty
+  the field is an empty string and the model falls back to its own knowledge.
+- `BaseWorker.__init__` instantiates a `Retriever` for the worker's role.
+- `infra/ollama/setup_ollama.sh` now also pulls `nomic-embed-text`.
+- `apps/workers/pyproject.toml` adds `chromadb>=0.5` and `httpx>=0.27`.
+- `.env.example` adds `FORGECHAIN_EMBED_MODEL` and `FORGECHAIN_KB_PATH`.
+
+### Rationale
+Fine-tuning Ollama requires GPU hours, thousands of labeled examples, and
+a full model rebuild each time knowledge changes — too expensive and too
+slow for a living codebase. RAG achieves the same effect at zero marginal
+cost: drop a `skills.md`, run one CLI command, and the knowledge is
+immediately available at the next inference call. The embedding model
+(`nomic-embed-text`) runs inside the same Ollama container already
+required by the junior tier, so no new infrastructure is needed.
+
+---
+
 ## [0.5.0] — 2026-04-07 — Ollama model optimisation
 
 ### Added

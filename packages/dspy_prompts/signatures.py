@@ -26,6 +26,8 @@ class JuniorCodeSignature(dspy.Signature):
 
     Keep output concise — this runs on a local small model with limited context.
     Output ONLY the changed lines as a unified diff. No explanation unless asked.
+    Use the retrieved_knowledge field to apply patterns and conventions from
+    the project's documentation and skills guides.
     """
     task_description: str = dspy.InputField(
         desc="Short, specific description of what to implement (≤300 words)"
@@ -33,7 +35,10 @@ class JuniorCodeSignature(dspy.Signature):
     role_context: str = dspy.InputField(
         desc="One-line role + stack: e.g. 'Python/FastAPI backend engineer'"
     )
-    # No existing_context field — keeps prompt small for local models
+    retrieved_knowledge: str = dspy.InputField(
+        desc="Relevant documentation excerpts and skill guides retrieved for this task. "
+             "Apply the patterns and conventions shown here. Empty string if none available."
+    )
     reasoning: str = dspy.OutputField(
         desc="Brief step-by-step plan (3-5 steps) before writing any code"
     )
@@ -58,9 +63,13 @@ class JuniorAnalysisSignature(dspy.Signature):
 
 class MidCodeSignature(dspy.Signature):
     """Produce a code patch with a self-review checklist."""
-    task_description: str = dspy.InputField(desc="What needs to be implemented")
-    role_context:     str = dspy.InputField(desc="Agent role and stack constraints")
-    existing_context: str = dspy.InputField(desc="Relevant existing code snippets or patterns")
+    task_description:    str = dspy.InputField(desc="What needs to be implemented")
+    role_context:        str = dspy.InputField(desc="Agent role and stack constraints")
+    existing_context:    str = dspy.InputField(desc="Relevant existing code snippets or patterns")
+    retrieved_knowledge: str = dspy.InputField(
+        desc="Retrieved documentation and skill guides relevant to this task. "
+             "Follow the patterns and conventions shown here."
+    )
     patch:            str = dspy.OutputField(desc="Unified diff patch")
     self_review:      str = dspy.OutputField(
         desc="Self-review checklist: edge cases covered, error handling, test coverage gaps"
@@ -72,9 +81,13 @@ class MidCodeSignature(dspy.Signature):
 
 class SeniorCodeSignature(dspy.Signature):
     """Produce a production-ready patch with architectural rationale and trade-off notes."""
-    task_description:   str = dspy.InputField(desc="What needs to be implemented")
-    role_context:       str = dspy.InputField(desc="Agent role and stack constraints")
-    existing_context:   str = dspy.InputField(desc="Relevant existing code snippets or patterns")
+    task_description:    str = dspy.InputField(desc="What needs to be implemented")
+    role_context:        str = dspy.InputField(desc="Agent role and stack constraints")
+    existing_context:    str = dspy.InputField(desc="Relevant existing code snippets or patterns")
+    retrieved_knowledge: str = dspy.InputField(
+        desc="Retrieved documentation, RFCs, and skill guides for this task. "
+             "Prefer patterns shown here over generic solutions."
+    )
     patch:              str = dspy.OutputField(desc="Unified diff patch")
     self_review:        str = dspy.OutputField(desc="Self-review: edge cases, error handling, tests")
     architecture_notes: str = dspy.OutputField(
@@ -116,6 +129,9 @@ class BATicketSignature(dspy.Signature):
     """Review a JIRA ticket as a Business Analyst."""
     jira_body:           str = dspy.InputField(desc="Full JIRA ticket body")
     project_context:     str = dspy.InputField(desc="Project background and tech stack")
+    retrieved_knowledge: str = dspy.InputField(
+        desc="Retrieved domain documentation relevant to this ticket. Use it to identify risks and gaps."
+    )
     summary:             str = dspy.OutputField(desc="Executive summary (2-3 sentences)")
     acceptance_criteria: str = dspy.OutputField(desc="Numbered acceptance criteria list")
     edge_cases:          str = dspy.OutputField(desc="Edge cases the engineering team must handle")
@@ -128,6 +144,9 @@ class QATestSignature(dspy.Signature):
     """Generate a pytest test suite for a backend feature."""
     feature_description: str = dspy.InputField(desc="What the feature does")
     implementation_hint: str = dspy.InputField(desc="Key functions/classes/endpoints to test")
+    retrieved_knowledge: str = dspy.InputField(
+        desc="Retrieved testing patterns, fixtures, and conventions from skills guides."
+    )
     test_file:           str = dspy.OutputField(desc="Complete pytest test file content")
     coverage_estimate:   str = dspy.OutputField(desc="Estimated coverage % and what is not covered")
     confidence:          str = dspy.OutputField(desc="Self-assessed confidence: low | medium | high")
