@@ -31,6 +31,18 @@ _PRICES: dict[str, dict[str, tuple[float, float]]] = {
         "gemini-1.5-pro":   (3.50,  10.50),
         "gemini-2.0-flash": (0.10,  0.40),
     },
+    "kilo": {
+        # Free daily allowance — $0 until quota exhausted, then ~$0.50–$2/1M
+        # Run GET https://api.kilo.ai/api/gateway/models for the live model list
+        "qwen/qwen3-coder":             (0.0, 0.0),  # Qwen3 Coder — code-first, junior tier
+        "deepseek/deepseek-r1-0528":    (0.0, 0.0),  # DeepSeek R1 — reasoning, mid tier
+        "moonshotai/kimi-k2":           (0.0, 0.0),  # Kimi K2 — versatile
+        "moonshotai/kimi-k2.5":         (0.0, 0.0),  # Kimi K2.5
+        "minimax/minimax-m2":           (0.0, 0.0),  # MiniMax M2
+        "z-ai/glm-4-7":                 (0.0, 0.0),  # GLM 4.7
+        "z-ai/glm-4-5-air":             (0.0, 0.0),  # GLM 4.5 Air (lightweight)
+        "arcee-ai/trinity-large":       (0.0, 0.0),  # Trinity Large Preview
+    },
     "anthropic": {
         "claude-haiku-4-5-20251001": (0.80,   4.00),
         "claude-sonnet-4-6":         (3.00,  15.00),
