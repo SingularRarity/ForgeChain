@@ -9,6 +9,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.0] — 2026-04-08 — Quant Layer (Phase 3)
+
+### Added
+- `packages/quant/` — four mathematical optimisation models:
+  - `bandit.py` — `BanditRouter`: Thompson Sampling multi-armed bandit per
+    `(role, tier)` pair. Samples `Beta(α+1, β+1)` for each eligible tier and
+    routes to the highest draw. Warm-starts default tier with 2 pseudo-approvals
+    to prevent cold-start thrashing. Activate with `FORGECHAIN_USE_BANDIT=1`.
+    α/β state persisted in Redis with 1-year TTL.
+  - `entropy.py` — `filter_by_entropy()` / `should_ingest()`: before upserting
+    a chunk, queries ChromaDB for the nearest neighbour. Skips if
+    `gain = 1 - max_similarity < MIN_GAIN` (default 0.15). Prevents KB
+    inflation from paraphrased duplicates. Threshold tuneable via
+    `FORGECHAIN_ENTROPY_MIN_GAIN`.
+  - `coverage.py` — `CoverageTracker`: records rolling average retrieval score
+    per role after every `Retriever.retrieve()` call. `get_gaps()` returns
+    roles below threshold (default 0.25) sorted by worst coverage, with
+    ingestion recommendations.
+  - `ema.py` — `EMATracker`: `quality[role] = 0.1×outcome + 0.9×quality[role]`.
+    Flags roles with quality < 0.6 for ≥ 7 consecutive days as degraded.
+    `get_all_health()` returns quality, degradation flag, days below threshold,
+    and remediation recommendation per role.
+
+### Changed
+- `packages/providers/tiered_router.py` — `get_route()` now calls
+  `_bandit_tier()` when no explicit tier is passed. When `FORGECHAIN_USE_BANDIT=0`
+  (default), falls back to static `ROLE_BASE_TIER` — no behaviour change.
+- `packages/learning/collector.py` — `on_approved()` and `on_rejected()` now
+  call `BanditRouter.record_outcome()` (α++ or β++) and `EMATracker.update()`
+  after persisting the training example.
+- `packages/learning/auto_ingest.py` — `filter_by_entropy()` applied before
+  `store.add_chunks()`. Near-duplicate chunks are dropped; ingestion skipped
+  entirely if all chunks are near-duplicates.
+- `packages/knowledge/retriever.py` — `retrieve()` calls
+  `CoverageTracker.record()` fire-and-forget after every retrieval (both
+  async and sync worker contexts handled).
+- `packages/prd/executor.py` — critical path tasks use `LPUSH` (front of
+  queue); non-critical tasks use `RPUSH`. Workers running `blpop` pick up
+  critical tasks first within each wave, minimising total wall-clock time.
+- `apps/api/forgechain_router.py` — two new endpoints:
+  - `GET /forgechain/knowledge/gaps` — coverage gaps with recommendations.
+  - `GET /forgechain/health/workers` — EMA quality, degradation alerts, and
+    bandit α/β stats (when bandit enabled).
+
+### Exponential growth mechanism
+```
+Every approved PR
+  ├── +1 DSPy training example       (better prompts — Phase 2)
+  ├── +N KB chunks (entropy-filtered) (better retrieval — Phase 1)
+  └── +1 bandit outcome sample        (better tier routing — Phase 3)
+
+Each improvement makes the next PR more likely to be approved on first attempt
+→ more approvals → more examples → faster improvement
+```
+
+---
+
 ## [0.8.0] — 2026-04-08 — Feedback Loop (Phase 2)
 
 ### Added

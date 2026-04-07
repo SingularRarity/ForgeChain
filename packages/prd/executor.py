@@ -62,6 +62,7 @@ class WaveExecutor:
 
             # Track prd_task_id → forgechain_task_id mapping
             task_job_map: dict[str, str] = {}
+            critical_set: set[str] = set(graph.critical_path)
 
             for wave in graph.waves:
                 logger.info(
@@ -73,13 +74,21 @@ class WaveExecutor:
                     current_wave=wave.wave_number,
                 )
 
-                # Create ForgeChain jobs for every task in this wave
+                # Create ForgeChain jobs for every task in this wave.
+                # Critical path tasks are pushed to the FRONT of their queue
+                # (LPUSH) so workers pick them up before non-critical work.
                 wave_job_ids: list[str] = []
-                for prd_task_id in wave.task_ids:
+                critical_ids = [t for t in wave.task_ids if t in critical_set]
+                non_critical_ids = [t for t in wave.task_ids if t not in critical_set]
+
+                for prd_task_id in critical_ids + non_critical_ids:
                     task = graph.task_by_id(prd_task_id)
                     if task is None:
                         continue
-                    job_id = await self._enqueue_job(redis, sm, graph.prd_id, task)
+                    is_critical = prd_task_id in critical_set
+                    job_id = await self._enqueue_job(
+                        redis, sm, graph.prd_id, task, priority=is_critical
+                    )
                     task_job_map[prd_task_id] = job_id
                     wave_job_ids.append(job_id)
 
@@ -88,6 +97,12 @@ class WaveExecutor:
                     f"forgechain:prd:{graph.prd_id}",
                     "task_job_map",
                     json.dumps(task_job_map),
+                )
+
+                logger.info(
+                    "[PRD:%s] Wave %d critical path tasks: %s",
+                    graph.prd_id, wave.wave_number,
+                    [t for t in wave.task_ids if t in critical_set],
                 )
 
                 # Poll until all jobs in this wave reach a terminal state
@@ -112,8 +127,14 @@ class WaveExecutor:
         sm: StateMachine,
         prd_id: str,
         task: PRDTask,
+        *,
+        priority: bool = False,
     ) -> str:
-        """Create a ForgeChain job for a single PRD task and push to queue."""
+        """Create a ForgeChain job for a single PRD task and push to queue.
+
+        priority=True → LPUSH (front of queue, picked up first by workers).
+        priority=False → RPUSH (back of queue, normal FIFO order).
+        """
         job_id = str(uuid.uuid4())
 
         route = _task_router.route(task.description, explicit_role=task.role)
@@ -135,11 +156,16 @@ class WaveExecutor:
             metadata["tier"] = "senior"
 
         await sm.create(job_id, metadata)
-        await redis.rpush(route.queue, job_id)
+
+        # Critical path → LPUSH (front); non-critical → RPUSH (back)
+        if priority:
+            await redis.lpush(route.queue, job_id)
+        else:
+            await redis.rpush(route.queue, job_id)
 
         logger.info(
-            "[PRD:%s] Enqueued job %s for task %s (role=%s queue=%s)",
-            prd_id, job_id[:8], task.task_id, task.role, route.queue,
+            "[PRD:%s] Enqueued job %s for task %s (role=%s queue=%s priority=%s)",
+            prd_id, job_id[:8], task.task_id, task.role, route.queue, priority,
         )
         return job_id
 
