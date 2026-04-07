@@ -1,0 +1,44 @@
+# Virtual environments — contain Linux symlinks (lib64) that Windows can't send to Docker
+.venv/
+**/.venv/
+venv/
+**/venv/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# Node / frontend build artefacts
+node_modules/
+**/node_modules/
+frontend/dist/
+
+# Git
+.git/
+.gitignore
+
+# Local docs and memory (not needed in images)
+local_docs/
+
+# Test output
+.pytest_cache/
+**/.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Editor / OS artefacts
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Docker build files themselves (no circular inclusion)
+docker-compose*.yml
+.dockerignore
+
+# Secrets — should never enter a build context
+.env
+.env.*
