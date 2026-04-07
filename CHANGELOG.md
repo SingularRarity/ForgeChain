@@ -9,6 +9,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0] — 2026-04-07 — PRD Engine (Phase 1)
+
+### Added
+- `packages/prd/` — PRD parsing and execution engine:
+  - `models.py` — `PRDTask`, `ExecutionWave`, `TaskGraph` frozen dataclasses.
+    All immutable — mutation returns new instances. `TaskGraph.as_dict()` for
+    Redis serialisation. `task_by_id()` for O(n) lookup.
+  - `parser.py` — `PRDParser`: calls Gemini (or best available provider) with
+    a strict JSON-only system prompt. Extracts tasks with role, dependencies,
+    and complexity. Validates all dependency edges against real task IDs.
+    Falls back to a single-task plan if LLM output is unparseable.
+  - `graph.py` — `build_graph()`: Kahn's topological sort assigns wave numbers
+    (O(V+E)). Dynamic programming on the DAG computes the critical path (longest
+    dependency chain). Returns a fully assembled `TaskGraph` with wave groupings.
+  - `executor.py` — `WaveExecutor`: executes waves sequentially, jobs within
+    each wave in parallel. Creates ForgeChain jobs via the existing state machine
+    and Redis queue. Polls every 10s (30-minute timeout per wave). Writes live
+    progress to `forgechain:prd:{id}` in Redis.
+- `apps/api/prd_router.py` — four new routes under `/forgechain`:
+  - `POST /forgechain/prd` — parse PRD text, return full plan before any code
+    is written (LLM call; 5–30s).
+  - `POST /forgechain/prd/{id}/execute` — start background wave execution;
+    returns immediately, workers process tasks asynchronously.
+  - `GET /forgechain/prd/{id}` — poll state, current wave, per-task job IDs.
+  - `GET /forgechain/prd/{id}/graph` — nodes + directed edges for UI graph
+    rendering; each node annotated with wave number and `is_critical` flag.
+- `src/api/main.py` — PRD router registered alongside forgechain router
+  (opt-in, graceful import fallback).
+
+### Why
+PRD volume is the prerequisite for Phase 2 (feedback loop) and Phase 3 (quant
+optimisation). Without a stream of automatically generated tasks there is no
+training signal for DSPy or the Thompson Sampling bandit. This phase generates
+that volume automatically.
+
+---
+
 ## [0.6.0] — 2026-04-07 — RAG knowledge base for local Ollama enrichment
 
 ### Added

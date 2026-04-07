@@ -35,6 +35,13 @@ try:
 except ImportError:
     _FORGECHAIN_ENABLED = False
 
+# PRD Engine router (optional: only loads if prd package is available)
+try:
+    from forgechain.prd_router import router as prd_router
+    _PRD_ENABLED = True
+except ImportError:
+    _PRD_ENABLED = False
+
 
 # Create Celery app for worker communication (broadcast commands)
 from celery import Celery
@@ -164,6 +171,9 @@ app.include_router(openrouter.router)  # OpenRouter monitoring endpoints
 
 if _FORGECHAIN_ENABLED:
     app.include_router(forgechain_router)
+
+if _PRD_ENABLED:
+    app.include_router(prd_router)
 
 
 @app.get("/")
