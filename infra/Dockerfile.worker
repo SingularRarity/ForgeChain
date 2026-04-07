@@ -25,6 +25,6 @@ RUN chown -R celery:celery /app /packages
 
 USER celery
 
-ENV PYTHONPATH="/app:/packages"
+ENV PYTHONPATH="/app/workers:/app:/packages"
 ENV UV_CACHE_DIR=/tmp/uv-cache
 ENV HOME=/home/celery
