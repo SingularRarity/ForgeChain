@@ -1,0 +1,30 @@
+# ForgeChain role worker image
+# Built from repo root context so it can see both /apps and /packages.
+
+FROM python:3.12-slim AS base
+
+ARG UID=1000
+ARG GID=1000
+
+RUN groupadd -g ${GID} celery && useradd -u ${UID} -g celery -m -s /bin/bash celery
+
+WORKDIR /app
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Install Python deps shared across all workers
+COPY apps/workers/pyproject.toml ./
+RUN uv sync --no-dev
+
+# Copy packages and worker code
+COPY packages /packages
+COPY apps/workers /app/workers
+
+RUN chown -R celery:celery /app /packages
+
+USER celery
+
+ENV PYTHONPATH="/app:/packages"
+ENV UV_CACHE_DIR=/tmp/uv-cache
+ENV HOME=/home/celery

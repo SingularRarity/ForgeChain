@@ -1,0 +1,251 @@
+# ForgeChain production docker-compose
+# Extends the base docker-compose.yml with:
+#  - Postgres for job metadata
+#  - Per-role worker services (scale via replicas)
+#  - OpenTelemetry collector
+#  - Separate forgechain network
+
+x-fc-worker-common: &fc-worker-common
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile.worker
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+  volumes:
+    - ../apps/workers:/app/workers
+    - ../packages:/packages
+  user: "1000:1000"
+  deploy:
+    resources:
+      limits:
+        memory: 768M
+        cpus: "1.0"
+      reservations:
+        memory: 256M
+        cpus: "0.25"
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "5"
+  stop_signal: SIGTERM
+  stop_grace_period: 30s
+
+x-fc-worker-env: &fc-worker-env
+  REDIS_URL: ${REDIS_URL}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+  DATABASE_URL: ${DATABASE_URL}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GROK_API_KEY: ${GROK_API_KEY:-}
+  LOCAL_LLM_URL: ${LOCAL_LLM_URL:-http://ollama:11434/v1}
+  LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-llama3.2}
+  FORGECHAIN_LLM_PROVIDER: ${FORGECHAIN_LLM_PROVIDER:-anthropic}
+  FORGECHAIN_VAULT_KEY: ${FORGECHAIN_VAULT_KEY}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  GITHUB_REPO: ${GITHUB_REPO:-}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  PYTHONUNBUFFERED: 1
+  PYTHONDONTWRITEBYTECODE: 1
+
+services:
+  # ── Infrastructure ────────────────────────────────────────────────────── #
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+        --save 900 1 --save 300 10 --save 60 10000
+        --stop-writes-on-bgsave-error no
+        --maxmemory 512mb
+        --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forgechain}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-forgechain}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../infra/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forgechain}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.98.0
+    volumes:
+      - ../infra/otel-config.yaml:/etc/otel/config.yaml:ro
+    command: ["--config=/etc/otel/config.yaml"]
+    ports:
+      - "4317:4317"   # gRPC
+      - "4318:4318"   # HTTP
+      - "8889:8889"   # Prometheus scrape
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    profiles:
+      - local-llm
+
+  # ── API (extended with ForgeChain router) ─────────────────────────────── #
+
+  api:
+    build:
+      context: ..
+      dockerfile: src/api/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: ${REDIS_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      DATABASE_URL: ${DATABASE_URL}
+      FORGECHAIN_VAULT_KEY: ${FORGECHAIN_VAULT_KEY}
+      DEBUG: "false"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../src/api:/app
+      - ../apps/api:/app/forgechain
+      - ../packages:/packages
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+    restart: unless-stopped
+
+  # ── Role Workers ──────────────────────────────────────────────────────── #
+
+  worker-frontend-dev:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-env
+      WORKER_ROLE: frontend_dev
+    deploy:
+      replicas: ${FRONTEND_DEV_REPLICAS:-2}
+    command: >
+      uv run celery -A workers.frontend_dev.worker worker
+        --loglevel=info
+        --queues=forgechain:frontend_dev
+        --concurrency=2
+
+  worker-backend-dev:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-env
+      WORKER_ROLE: backend_dev
+    deploy:
+      replicas: ${BACKEND_DEV_REPLICAS:-3}
+    command: >
+      uv run celery -A workers.backend_dev.worker worker
+        --loglevel=info
+        --queues=forgechain:backend_dev
+        --concurrency=2
+
+  worker-qa-backend:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-env
+      WORKER_ROLE: qa_backend
+    deploy:
+      replicas: ${QA_BACKEND_REPLICAS:-2}
+    command: >
+      uv run celery -A workers.qa_backend.worker worker
+        --loglevel=info
+        --queues=forgechain:qa_backend
+        --concurrency=2
+
+  worker-db-eng:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-env
+      WORKER_ROLE: db_eng
+    deploy:
+      replicas: ${DB_ENG_REPLICAS:-1}
+    command: >
+      uv run celery -A workers.db_eng.worker worker
+        --loglevel=info
+        --queues=forgechain:db_eng
+        --concurrency=1
+
+  worker-ai-eng:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-env
+      WORKER_ROLE: ai_eng
+    deploy:
+      replicas: ${AI_ENG_REPLICAS:-2}
+    command: >
+      uv run celery -A workers.ai_eng.worker worker
+        --loglevel=info
+        --queues=forgechain:ai_eng
+        --concurrency=1
+
+  worker-sre:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-env
+      WORKER_ROLE: sre
+    deploy:
+      replicas: ${SRE_REPLICAS:-1}
+    command: >
+      uv run celery -A workers.sre.worker worker
+        --loglevel=info
+        --queues=forgechain:sre
+        --concurrency=1
+
+  worker-ba:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-env
+      WORKER_ROLE: ba
+    deploy:
+      replicas: ${BA_REPLICAS:-1}
+    command: >
+      uv run celery -A workers.ba.worker worker
+        --loglevel=info
+        --queues=forgechain:ba
+        --concurrency=2
+
+  # ── Frontend (extended dashboard) ────────────────────────────────────── #
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  postgres_data:
+  ollama_models:
