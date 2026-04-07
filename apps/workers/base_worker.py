@@ -36,6 +36,7 @@ from providers.token_ledger import TokenLedger
 from dspy_prompts import ForgeChainModule
 from knowledge import Retriever
 from notify import dispatcher as _notifier
+from sandbox import SandboxRunner
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,37 @@ class BaseWorker(ABC):
                 }.items()},
             )
 
-            # 7. GitHub PR
+            # 7. Sandbox validation — run target project's tests + A/B + smoke
+            #    Runs only when FORGECHAIN_SANDBOX_ENABLED=1 and task has a project
+            #    with a local repo_path. Always non-blocking: failures attach a report
+            #    but do NOT prevent the job from reaching REVIEW.
+            sandbox_report_json = ""
+            if patch:
+                try:
+                    repo_path = task.get("repo_path") or await self._resolve_repo_path(
+                        task.get("project")
+                    )
+                    sb_runner = SandboxRunner(self._redis_url)
+                    sb_report = await sb_runner.validate(
+                        task_id=task_id,
+                        patch=patch,
+                        repo_path=repo_path or "",
+                        project_id=task.get("project"),
+                    )
+                    sandbox_report_json = sb_report.to_json()
+                    logger.info(
+                        "[%s] Sandbox: %s",
+                        self.role,
+                        "PASSED" if sb_report.overall_passed else "FAILED",
+                    )
+                    self._redis.hset(
+                        f"forgechain:task:{task_id}",
+                        "sandbox_report", sandbox_report_json,
+                    )
+                except Exception as exc:
+                    logger.warning("[%s] Sandbox runner error (non-fatal): %s", self.role, exc)
+
+            # 8. GitHub PR
             pr_url = ""
             if self._github_token and self._repo_name and patch:
                 pr_url = self._open_pr(task_id, task, patch, route)
@@ -294,6 +325,21 @@ class BaseWorker(ABC):
     # ------------------------------------------------------------------ #
     # GitHub PR                                                            #
     # ------------------------------------------------------------------ #
+
+    async def _resolve_repo_path(self, project_id: Optional[str]) -> Optional[str]:
+        """Look up repo_path from the project registry for sandbox validation."""
+        if not project_id:
+            return None
+        try:
+            import redis.asyncio as _aioredis
+            r = _aioredis.from_url(self._redis_url, decode_responses=True)
+            try:
+                path = await r.hget(f"forgechain:registry:project:{project_id}", "repo_path")
+                return path or None
+            finally:
+                await r.aclose()
+        except Exception:
+            return None
 
     def _open_pr(
         self,
