@@ -42,7 +42,8 @@ ALL_ROLES = [
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
-    ing = Ingester(role=args.role)
+    project_id = getattr(args, "project", None) or None
+    ing = Ingester(role=args.role, project_id=project_id)
 
     if args.subcommand == "file":
         count = ing.ingest_file(args.path)
@@ -54,7 +55,22 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         print(f"Unknown ingest subcommand: {args.subcommand}")
         sys.exit(1)
 
-    print(f"✓ Ingested {count} chunks into role '{args.role}'")
+    scope = f"project '{project_id}'" if project_id else "global KB"
+    print(f"✓ Ingested {count} chunks into role '{args.role}' ({scope})")
+
+
+def cmd_scan(args: argparse.Namespace) -> None:
+    """Auto-scan a local repo folder and ingest into a project KB."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from registry.scanner import RepoScanner
+
+    print(f"Scanning {args.repo_path} → project '{args.project}' ...")
+    scanner = RepoScanner(project_id=args.project)
+    result = scanner.scan(args.repo_path)
+    print(result.summary())
+    if result.warnings:
+        for w in result.warnings:
+            print(f"  ⚠  {w}")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -94,6 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
     # ingest
     ingest_p = sub.add_parser("ingest", help="Add content to the knowledge base")
     ingest_p.add_argument("--role", required=True, choices=ALL_ROLES)
+    ingest_p.add_argument(
+        "--project", default=None,
+        help="Project ID for multi-app scoping (omit for global KB)",
+    )
     ingest_sub = ingest_p.add_subparsers(dest="subcommand", required=True)
 
     file_p = ingest_sub.add_parser("file", help="Ingest a local file")
@@ -104,6 +124,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     dir_p = ingest_sub.add_parser("dir", help="Ingest all docs in a directory")
     dir_p.add_argument("directory", help="Path to directory")
+
+    # scan
+    scan_p = sub.add_parser(
+        "scan",
+        help="Auto-scan a local repo folder and ingest its docs into a project KB",
+    )
+    scan_p.add_argument("--project", required=True, help="Target project ID")
+    scan_p.add_argument("repo_path", help="Absolute path to the local codebase")
 
     # status
     status_p = sub.add_parser("status", help="Show knowledge base stats")
@@ -130,6 +158,7 @@ def main() -> None:
         "status":     cmd_status,
         "delete":     cmd_delete,
         "list-roles": cmd_list_roles,
+        "scan":       cmd_scan,
     }
     dispatch[args.command](args)
 
