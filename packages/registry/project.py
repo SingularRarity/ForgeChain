@@ -35,7 +35,8 @@ class Project:
     project_id: str
     name: str
     description: str
-    repo: str                     # GitHub repo (org/name) or empty
+    repo: str                     # GitHub repo (org/name) — auto-detected or manual
+    repo_path: str                # Absolute local path to the codebase (empty if remote-only)
     created_at: float
     active: bool = True
 
@@ -71,6 +72,7 @@ class ProjectRegistry:
         name: str,
         description: str = "",
         repo: str = "",
+        repo_path: str = "",
         project_id: str | None = None,
     ) -> Project:
         """Register a new project, create its directory structure, return it."""
@@ -82,6 +84,7 @@ class ProjectRegistry:
             name=name,
             description=description,
             repo=repo,
+            repo_path=str(Path(repo_path).resolve()) if repo_path else "",
             created_at=now,
         )
 
@@ -110,6 +113,25 @@ class ProjectRegistry:
         redis = aioredis.from_url(self._redis_url, decode_responses=True)
         try:
             await redis.hset(_project_key(project_id), "active", str(active))
+        finally:
+            await redis.aclose()
+
+    async def update_repo(
+        self,
+        project_id: str,
+        repo: str = "",
+        repo_path: str = "",
+    ) -> None:
+        """Update the git remote and/or local path for a project."""
+        redis = aioredis.from_url(self._redis_url, decode_responses=True)
+        try:
+            updates: dict[str, str] = {}
+            if repo:
+                updates["repo"] = repo
+            if repo_path:
+                updates["repo_path"] = repo_path
+            if updates:
+                await redis.hset(_project_key(project_id), mapping=updates)
         finally:
             await redis.aclose()
 
@@ -186,6 +208,7 @@ def _deserialize(data: dict[str, str]) -> Project | None:
             name=data.get("name", data["project_id"]),
             description=data.get("description", ""),
             repo=data.get("repo", ""),
+            repo_path=data.get("repo_path", ""),
             created_at=float(data.get("created_at", 0)),
             active=data.get("active", "True") == "True",
         )

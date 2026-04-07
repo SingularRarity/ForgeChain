@@ -35,9 +35,10 @@ _USER_AGENT = "ForgeChain-KnowledgeBot/1.0 (educational; contact admin@singularr
 
 
 class Ingester:
-    def __init__(self, role: str) -> None:
+    def __init__(self, role: str, project_id: str | None = None) -> None:
         self.role = role
-        self._store = KnowledgeStore(role)
+        self.project_id = project_id
+        self._store = KnowledgeStore(role, project_id=project_id)
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #

@@ -9,6 +9,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.0] — 2026-04-08 — Repo Scanner
+
+### Added
+- `packages/registry/scanner.py` — `RepoScanner.scan(repo_path)`:
+  - Detects git remote via `git remote get-url origin` → auto-fills `repo` field.
+  - Detects tech stack from manifest files (package.json, pyproject.toml,
+    go.mod, Cargo.toml, pom.xml, Gemfile, composer.json, *.csproj).
+  - Determines relevant agent roles from stack + extra detectors (Prisma/SQL
+    → db_eng, Dockerfile/.github → sre, pytest/jest → qa_backend,
+    torch/transformers → ai_eng).
+  - Builds a directory-tree + config-summary document (no raw source).
+  - Ingests README, docs/**, config summaries, schema files per role into
+    the project-specific ChromaDB KB. All via the existing Ingester pipeline
+    (entropy dedup + chunker + nomic-embed-text).
+  - Returns `ScanResult` with `detected_stack`, `roles_discovered`,
+    `chunks_added`, `files_ingested`, `warnings`, and a `summary()` string.
+- `POST /forgechain/projects/{id}/scan` — point at a local folder any time;
+  re-scan is idempotent (chunks upserted, not duplicated).
+- `python -m knowledge.cli scan --project <id> <repo_path>` — CLI equivalent.
+
+### Changed
+- `apps/api/registry_router.py` — `ProjectCreateRequest` gains `repo_path`;
+  when provided, scanner runs synchronously during `POST /forgechain/projects`
+  and the `scan_summary` is returned in the response. Git remote auto-updates
+  the project's `repo` field.
+- `packages/registry/project.py` — `Project` gains `repo_path` field;
+  `ProjectRegistry` gains `update_repo()`. `create()` accepts `repo_path`.
+- `packages/knowledge/ingester.py` — `Ingester(role, project_id=None)` passes
+  `project_id` to `KnowledgeStore` so scanned files land in the project KB.
+- `packages/knowledge/cli.py` — `ingest` gains `--project` flag; new `scan`
+  subcommand.
+
+---
+
 ## [1.0.0] — 2026-04-08 — Multi-app Registry (Phase 4)
 
 ### Added
