@@ -23,11 +23,14 @@ from dataclasses import replace
 from typing import Any
 
 import redis.asyncio as aioredis
+from celery import Celery
 
 import sys
 for _p in ["/packages", "../../packages"]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+import os
 
 from orchestrator import StateMachine, TaskState
 from orchestrator.router import TaskRouter
@@ -179,11 +182,16 @@ class WaveExecutor:
 
         await sm.create(job_id, metadata)
 
-        # Critical path → LPUSH (front); non-critical → RPUSH (back)
-        if priority:
-            await redis.lpush(route.queue, job_id)
-        else:
-            await redis.rpush(route.queue, job_id)
+        # Dispatch via Celery. Critical path tasks get high priority (0 = highest).
+        broker = os.environ.get("CELERY_BROKER_URL", os.environ.get("REDIS_URL", "redis://redis:6379/0"))
+        celery_app = Celery("forgechain-prd", broker=broker, backend=None)
+        celery_app.conf.update(task_serializer="json", accept_content=["json"], task_ignore_result=True)
+        celery_app.send_task(
+            route.celery_task,
+            args=[job_id],
+            queue=route.queue,
+            priority=9 if priority else 5,  # 9 = highest in Celery (0-9 scale)
+        )
 
         logger.info(
             "[PRD:%s] Enqueued job %s for task %s (role=%s queue=%s priority=%s)",

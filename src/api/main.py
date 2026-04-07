@@ -29,22 +29,23 @@ from services import RedisService, TaskService, QueueService, HealthService
 import services  # Import the module to modify globals
 
 # ForgeChain router (optional: only loads if packages are available)
+# apps/api/ is mounted at /app/forgechain in Docker; sys.path already includes it.
 try:
-    from forgechain.forgechain_router import router as forgechain_router
+    from forgechain_router import router as forgechain_router
     _FORGECHAIN_ENABLED = True
 except ImportError:
     _FORGECHAIN_ENABLED = False
 
 # PRD Engine router (optional: only loads if prd package is available)
 try:
-    from forgechain.prd_router import router as prd_router
+    from prd_router import router as prd_router
     _PRD_ENABLED = True
 except ImportError:
     _PRD_ENABLED = False
 
 # Multi-app Registry router (optional)
 try:
-    from forgechain.registry_router import router as registry_router
+    from registry_router import router as registry_router
     _REGISTRY_ENABLED = True
 except ImportError:
     _REGISTRY_ENABLED = False

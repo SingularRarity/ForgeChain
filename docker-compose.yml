@@ -1,5 +1,9 @@
 # docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
 # Common configurations using YAML anchors
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Original AsyncTaskFlow worker (handles src/worker tasks) ─────────────── #
 x-worker-common: &worker-common
   build:
     context: .
@@ -61,19 +65,82 @@ x-worker-full-environment: &worker-full-environment
   CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
   CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-600}
 
+# ── ForgeChain role worker (all 7 roles share this image) ────────────────── #
+x-fc-worker-common: &fc-worker-common
+  build:
+    context: .
+    dockerfile: infra/Dockerfile.worker
+    args:
+      UID: 1000
+      GID: 1000
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+  volumes:
+    - ./packages:/packages           # live-reload packages in dev
+    - ./apps/workers:/app/workers    # live-reload worker code in dev
+    - fc_projects:/app/projects      # per-project KB dirs
+    - fc_weights:/app/weights        # DSPy weights (hot-loaded by workers)
+    - fc_kb:/app/knowledge_base      # global KB
+  user: "1000:1000"
+  restart: unless-stopped
+  tmpfs:
+    - /tmp:noexec,nosuid,size=100m
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+  stop_signal: SIGTERM
+  stop_grace_period: 30s
+
+x-fc-worker-environment: &fc-worker-environment
+  REDIS_URL: ${REDIS_URL}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+  DATABASE_URL: ${DATABASE_URL}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+  GEMINI_API_KEY: ${GEMINI_API_KEY}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-pro}
+  GROK_API_KEY: ${GROK_API_KEY}
+  GROK_MODEL: ${GROK_MODEL:-grok-3-mini}
+  LOCAL_LLM_URL: ${LOCAL_LLM_URL:-http://ollama:11434/v1}
+  LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-forgechain-junior}
+  FORGECHAIN_EMBED_MODEL: ${FORGECHAIN_EMBED_MODEL:-nomic-embed-text}
+  FORGECHAIN_LLM_PROVIDER: ${FORGECHAIN_LLM_PROVIDER:-anthropic}
+  FORGECHAIN_KB_PATH: /app/knowledge_base
+  FORGECHAIN_PROJECTS_PATH: /app/projects
+  FORGECHAIN_WEIGHTS_DIR: /app/weights
+  FORGECHAIN_USE_BANDIT: ${FORGECHAIN_USE_BANDIT:-0}
+  FORGECHAIN_ENTROPY_MIN_GAIN: ${FORGECHAIN_ENTROPY_MIN_GAIN:-0.15}
+  FORGECHAIN_MIN_TRAIN_EXAMPLES: ${FORGECHAIN_MIN_TRAIN_EXAMPLES:-10}
+  GITHUB_TOKEN: ${GITHUB_TOKEN}
+  GITHUB_REPO: ${GITHUB_REPO}
+  FORGECHAIN_VAULT_KEY: ${FORGECHAIN_VAULT_KEY}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+  TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+  DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+  PYTHONDONTWRITEBYTECODE: 1
+  PYTHONUNBUFFERED: 1
+  C_FORCE_ROOT: 0
+  HOME: /home/celery
+  UV_CACHE_DIR: /tmp/uv-cache
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Services
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
+  # ── Infrastructure ──────────────────────────────────────────────────────── #
+
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    # RDB snapshotting configuration for development
-    # Saves to disk if: 1 key changes in 15min, 10 keys in 5min, or 10000 keys in 1min
-    # For production, consider using AOF for better data durability:
-    # command: redis-server --appendonly yes
-    # Or use both RDB and AOF together:
-    # command: redis-server --save 900 1 --save 300 10 --save 60 10000 --appendonly yes
     command: redis-server --save 900 1 --save 300 10 --save 60 10000 --stop-writes-on-bgsave-error no
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -82,6 +149,41 @@ services:
       retries: 3
       start_period: 30s
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forgechain}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+      POSTGRES_DB: ${POSTGRES_DB:-forgechain}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forgechain}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Pull models on first start — runs setup script if present
+    # After stack is up, run: docker compose exec ollama bash infra/ollama/setup_ollama.sh
+
+  # ── API ─────────────────────────────────────────────────────────────────── #
+
   api:
     build:
       context: .
@@ -89,24 +191,51 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - REDIS_URL=${REDIS_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
-      - OPENROUTER_TIMEOUT=${OPENROUTER_TIMEOUT}
-      - DEBUG=${DEBUG:-true}
+      REDIS_URL: ${REDIS_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL}
+      OPENROUTER_TIMEOUT: ${OPENROUTER_TIMEOUT}
+      DEBUG: ${DEBUG:-true}
+      # ForgeChain vars needed by routers that import packages
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GROK_API_KEY: ${GROK_API_KEY}
+      LOCAL_LLM_URL: ${LOCAL_LLM_URL:-http://ollama:11434/v1}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-forgechain-junior}
+      FORGECHAIN_EMBED_MODEL: ${FORGECHAIN_EMBED_MODEL:-nomic-embed-text}
+      FORGECHAIN_LLM_PROVIDER: ${FORGECHAIN_LLM_PROVIDER:-anthropic}
+      FORGECHAIN_KB_PATH: /app/knowledge_base
+      FORGECHAIN_PROJECTS_PATH: /app/projects
+      FORGECHAIN_WEIGHTS_DIR: /app/weights
+      DATABASE_URL: ${DATABASE_URL}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_REPO: ${GITHUB_REPO}
+      FORGECHAIN_VAULT_KEY: ${FORGECHAIN_VAULT_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     volumes:
-      - ./src/api:/app
+      - ./src/api:/app                     # core FastAPI app
+      - ./apps/api:/app/forgechain         # ForgeChain routers (importable as forgechain_router etc.)
+      - ./packages:/packages               # ForgeChain packages (/packages on sys.path)
+      - fc_projects:/app/projects
+      - fc_weights:/app/weights
+      - fc_kb:/app/knowledge_base
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── Original AsyncTaskFlow workers ──────────────────────────────────────── #
 
   worker:
     <<: *worker-common
-    environment: 
+    environment:
       <<: *worker-full-environment
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     deploy:
@@ -130,7 +259,7 @@ services:
 
   scheduler:
     <<: *worker-common
-    environment: 
+    environment:
       <<: *worker-environment
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
@@ -143,6 +272,120 @@ services:
     labels:
       - "com.asynctaskflow.service=scheduler"
 
+  # ── ForgeChain role workers ──────────────────────────────────────────────── #
+
+  fc-backend-dev:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-environment
+    command: >
+      uv run celery -A workers.backend_dev.worker worker
+      -Q forgechain:backend_dev --loglevel=${LOG_LEVEL:-info}
+      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
+    deploy:
+      replicas: ${BACKEND_DEV_REPLICAS:-2}
+    labels:
+      - "com.forgechain.role=backend_dev"
+
+  fc-frontend-dev:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-environment
+    command: >
+      uv run celery -A workers.frontend_dev.worker worker
+      -Q forgechain:frontend_dev --loglevel=${LOG_LEVEL:-info}
+      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
+    deploy:
+      replicas: ${FRONTEND_DEV_REPLICAS:-2}
+    labels:
+      - "com.forgechain.role=frontend_dev"
+
+  fc-qa-backend:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-environment
+    command: >
+      uv run celery -A workers.qa_backend.worker worker
+      -Q forgechain:qa_backend --loglevel=${LOG_LEVEL:-info}
+      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
+    deploy:
+      replicas: ${QA_BACKEND_REPLICAS:-1}
+    labels:
+      - "com.forgechain.role=qa_backend"
+
+  fc-db-eng:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-environment
+    command: >
+      uv run celery -A workers.db_eng.worker worker
+      -Q forgechain:db_eng --loglevel=${LOG_LEVEL:-info}
+      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
+    deploy:
+      replicas: ${DB_ENG_REPLICAS:-1}
+    labels:
+      - "com.forgechain.role=db_eng"
+
+  fc-ai-eng:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-environment
+    command: >
+      uv run celery -A workers.ai_eng.worker worker
+      -Q forgechain:ai_eng --loglevel=${LOG_LEVEL:-info}
+      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
+    deploy:
+      replicas: ${AI_ENG_REPLICAS:-1}
+    labels:
+      - "com.forgechain.role=ai_eng"
+
+  fc-sre:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-environment
+    command: >
+      uv run celery -A workers.sre.worker worker
+      -Q forgechain:sre --loglevel=${LOG_LEVEL:-info}
+      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
+    deploy:
+      replicas: ${SRE_REPLICAS:-1}
+    labels:
+      - "com.forgechain.role=sre"
+
+  fc-ba:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-environment
+    command: >
+      uv run celery -A workers.ba.worker worker
+      -Q forgechain:ba --loglevel=${LOG_LEVEL:-info}
+      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
+    deploy:
+      replicas: ${BA_REPLICAS:-1}
+    labels:
+      - "com.forgechain.role=ba"
+
+  # ── Feedback worker (nightly DSPy training beat) ─────────────────────────── #
+
+  fc-feedback:
+    <<: *fc-worker-common
+    environment:
+      <<: *fc-worker-environment
+    # Combined worker + beat: processes feedback_train tasks AND fires the schedule
+    command: >
+      uv run celery -A workers.feedback_worker worker
+      --beat -Q celery --loglevel=${LOG_LEVEL:-info} --concurrency=1
+    labels:
+      - "com.forgechain.service=feedback"
+
+  # ── Frontend ─────────────────────────────────────────────────────────────── #
 
   frontend:
     build:
@@ -154,6 +397,8 @@ services:
       - api
     labels:
       - "com.asynctaskflow.service=frontend"
+
+  # ── Utility profiles ─────────────────────────────────────────────────────── #
 
   reset:
     build:
@@ -171,5 +416,25 @@ services:
     profiles:
       - tools
 
+  db-init:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./infra/init.sql:/init.sql:ro
+    entrypoint: >
+      psql -h postgres -U ${POSTGRES_USER:-forgechain}
+           -d ${POSTGRES_DB:-forgechain} -f /init.sql
+    profiles:
+      - tools
+
 volumes:
   redis_data:
+  postgres_data:
+  ollama_data:
+  fc_projects:   # per-project ChromaDB dirs + skills
+  fc_weights:    # DSPy BootstrapFewShot weights (hot-loaded by workers)
+  fc_kb:         # global knowledge base (ChromaDB)
