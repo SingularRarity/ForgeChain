@@ -26,6 +26,7 @@ sys.path.insert(0, "/packages")
 from orchestrator import TaskRouter, StateMachine, TaskState
 from providers.token_ledger import TokenLedger
 from providers.pricing import TIER_DEFAULTS, calculate_cost
+from learning.collector import Collector
 
 router = APIRouter(prefix="/forgechain", tags=["forgechain"])
 
@@ -103,6 +104,10 @@ _task_router = TaskRouter()
 
 async def get_ledger() -> TokenLedger:
     return TokenLedger(_redis_url())
+
+
+def _collector() -> Collector:
+    return Collector(_redis_url())
 
 
 def _serialize_job(data: dict[str, Any]) -> JobResponse:
@@ -187,6 +192,13 @@ async def approve_job(
         await sm.transition(task_id, TaskState.DONE)
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Feedback loop: persist positive example + auto-ingest patch into KB
+    try:
+        await _collector().on_approved(task_id)
+    except Exception:
+        pass  # never block approval on learning pipeline failure
+
     data = await sm.get(task_id)
     return _serialize_job(data or {})
 
@@ -215,6 +227,13 @@ async def reject_job(
             await redis.rpush(queue, task_id)
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Feedback loop: persist negative example
+    try:
+        await _collector().on_rejected(task_id, body.comment or "")
+    except Exception:
+        pass  # never block rejection on learning pipeline failure
+
     data = await sm.get(task_id)
     return _serialize_job(data or {})
 
