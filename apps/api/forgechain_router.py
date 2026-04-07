@@ -16,6 +16,7 @@ import uuid
 from typing import Any, Literal, Optional
 
 import redis.asyncio as aioredis
+from celery import Celery
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -92,6 +93,14 @@ def _redis_url() -> str:
     return os.environ["REDIS_URL"]
 
 
+def _celery_app() -> Celery:
+    """Lightweight Celery client for dispatching tasks — no worker here."""
+    broker = os.environ.get("CELERY_BROKER_URL", os.environ["REDIS_URL"])
+    app = Celery("forgechain-api", broker=broker, backend=None)
+    app.conf.update(task_serializer="json", accept_content=["json"], task_ignore_result=True)
+    return app
+
+
 async def get_state_machine() -> StateMachine:
     return StateMachine(_redis_url())
 
@@ -165,8 +174,8 @@ async def create_job(
 
     await sm.create(task_id, metadata)
 
-    # Push task_id to role-specific Redis queue
-    await redis.rpush(route.queue, task_id)
+    # Dispatch via Celery so workers receive it through their task queue
+    _celery_app().send_task(route.celery_task, args=[task_id], queue=route.queue)
 
     data = await sm.get(task_id)
     return _serialize_job(data or {})
@@ -240,10 +249,12 @@ async def reject_job(
             extra={"reviewer": body.reviewer, "reject_reason": body.comment or ""},
         )
         await sm.transition(task_id, TaskState.PENDING)
-        # Re-enqueue onto the same role queue
+        # Re-enqueue via Celery onto the same role queue
         queue = data_before.get("queue", "")
-        if queue:
-            await redis.rpush(queue, task_id)
+        role  = data_before.get("role", "")
+        if queue and role:
+            celery_task = f"forgechain_{role}_task"
+            _celery_app().send_task(celery_task, args=[task_id], queue=queue)
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -350,7 +361,9 @@ async def request_cto_review(
     await redis.hset(f"forgechain:task:{task_id}", "tier", "cto")
     await sm.transition(task_id, TaskState.REJECTED)   # REVIEW → REJECTED
     await sm.transition(task_id, TaskState.PENDING)    # REJECTED → PENDING
-    await redis.rpush(queue, task_id)
+    role = data.get("role", "")
+    celery_task = f"forgechain_{role}_task"
+    _celery_app().send_task(celery_task, args=[task_id], queue=queue)
 
     data = await sm.get(task_id)
     return _serialize_job(data or {})
