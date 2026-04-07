@@ -24,6 +24,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# Keep frontend lib/ — the Python rule above would otherwise ignore it
+!frontend/src/lib/
 parts/
 sdist/
 var/
