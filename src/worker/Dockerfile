@@ -52,8 +52,10 @@ RUN mkdir -p /app/logs /app/tmp && \
     chown -R celery:celery /app /home/celery
 
 # Add the enhanced startup script
+# sed strips Windows CRLF so the shebang is valid on Linux
 COPY src/worker/start_worker.sh /app/
-RUN chmod +x /app/start_worker.sh && \
+RUN sed -i 's/\r//' /app/start_worker.sh && \
+    chmod +x /app/start_worker.sh && \
     chown celery:celery /app/start_worker.sh
 
 # Switch to non-root user
