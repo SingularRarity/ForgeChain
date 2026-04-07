@@ -9,6 +9,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.0] — 2026-04-08 — Multi-app Registry (Phase 4)
+
+### Added
+- `packages/registry/` — multi-app project management:
+  - `project.py` — `Project` frozen dataclass with computed `kb_path` /
+    `skills_path`. `ProjectRegistry` async CRUD: create (auto-creates
+    disk directories), list, get, delete. Projects stored in Redis sorted
+    set + hash. Shared KB directories auto-created on first project
+    registration.
+  - `promoter.py` — `Promoter.check_and_promote()`: after every patch
+    ingestion, queries all other active project KBs for a similar chunk
+    (similarity > 0.75). If found AND information gain against the shared
+    KB > 0.50, promotes the chunk to `shared/knowledge_base/`. Two
+    thresholds are purposely higher than the normal ingestion threshold
+    (0.15) to keep the shared KB tight.
+- `apps/api/registry_router.py` — five routes:
+  - `POST   /forgechain/projects`          — register project, create dirs
+  - `GET    /forgechain/projects`          — list all (or active only)
+  - `GET    /forgechain/projects/{id}`     — project details + paths
+  - `DELETE /forgechain/projects/{id}`     — remove from registry (preserves disk)
+  - `GET    /forgechain/projects/{id}/gaps` — coverage gaps for a project
+- `.env.example` — all Phase 3 and Phase 4 env vars documented.
+
+### Changed
+- `packages/knowledge/store.py` — `KnowledgeStore(role, project_id=None)`:
+  `project_id=None` → global KB at `FORGECHAIN_KB_PATH` (unchanged).
+  Any string → `{FORGECHAIN_PROJECTS_PATH}/{project_id}/knowledge_base/`.
+  Each project gets its own `PersistentClient` (separate ChromaDB dir).
+- `packages/knowledge/retriever.py` — `Retriever(role, project_id=None)`:
+  with `project_id`, queries two stores (project + shared) and returns
+  merged results deduped by text and re-ranked by cosine similarity.
+  Without `project_id`: identical to previous behaviour.
+- `packages/learning/auto_ingest.py` — `ingest(..., project_id=None)`:
+  targets project-specific store when scoped; calls
+  `Promoter.check_and_promote()` after ingestion (fire-and-forget).
+- `packages/learning/collector.py` — reads `project` from task metadata
+  and forwards it to `AutoIngestor.ingest()`.
+- `apps/workers/base_worker.py` — `build_inputs()` creates a project-
+  scoped `Retriever` when the task has a `project` field; falls back to
+  the shared global retriever otherwise.
+- `apps/api/forgechain_router.py` — `JobCreateRequest` gains optional
+  `project` field; forwarded into task Redis hash.
+- `apps/api/prd_router.py` — `PRDCreateRequest` gains optional `project`
+  field; forwarded through executor to every enqueued job.
+- `packages/prd/executor.py` — `execute(graph, project_id=None)` and
+  `_enqueue_job(..., project_id=None)` forward project scope to task metadata.
+- `src/api/main.py` — registry router registered.
+
+### Directory structure on disk
+```
+{FORGECHAIN_PROJECTS_PATH}/
+  {project_id}/
+    knowledge_base/     ChromaDB for this project
+    skills/             Project-specific skills files
+  shared/
+    knowledge_base/     Auto-promoted cross-project patterns
+    skills/             Universal conventions
+```
+
+---
+
 ## [0.9.0] — 2026-04-08 — Quant Layer (Phase 3)
 
 ### Added

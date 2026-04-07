@@ -85,12 +85,14 @@ class Collector:
 
         # Auto-ingest approved patch back into the role's ChromaDB KB
         if patch:
+            project_id = task.get("project") or None
             try:
                 await self._ingestor.ingest(
                     task_id=task_id,
                     role=role,
                     description=description,
                     patch=patch,
+                    project_id=project_id,
                 )
             except Exception:
                 logger.warning(

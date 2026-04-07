@@ -22,16 +22,27 @@ from .chunker import Chunk
 
 logger = logging.getLogger(__name__)
 
-_KB_PATH     = os.getenv("FORGECHAIN_KB_PATH", "/app/knowledge_base")
+_KB_PATH          = os.getenv("FORGECHAIN_KB_PATH", "/app/knowledge_base")
+_PROJECTS_PATH    = os.getenv("FORGECHAIN_PROJECTS_PATH", "/app/projects")
 _COLLECTION_PREFIX = "forgechain_"
 
 
-def _client() -> chromadb.ClientAPI:
-    """Return a persistent ChromaDB client (singleton per process)."""
+def _client(path: str) -> chromadb.ClientAPI:
+    """Return a persistent ChromaDB client for the given directory path."""
+    import pathlib
+    pathlib.Path(path).mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(
-        path=_KB_PATH,
+        path=path,
         settings=Settings(anonymized_telemetry=False),
     )
+
+
+def _resolve_kb_path(project_id: str | None) -> str:
+    """Resolve the ChromaDB directory for a given project scope."""
+    if project_id is None:
+        return _KB_PATH
+    # "shared" or any project_id → under FORGECHAIN_PROJECTS_PATH
+    return os.path.join(_PROJECTS_PATH, project_id, "knowledge_base")
 
 
 def _collection_name(role: str) -> str:
@@ -40,11 +51,21 @@ def _collection_name(role: str) -> str:
 
 
 class KnowledgeStore:
-    """Add chunks and query them by role."""
+    """Add chunks and query them by role.
 
-    def __init__(self, role: str) -> None:
+    Args:
+        role:       Agent role (e.g. "backend_dev").
+        project_id: Optional project scope.
+                    None  → global KB at FORGECHAIN_KB_PATH (original behaviour).
+                    str   → project KB at FORGECHAIN_PROJECTS_PATH/{project_id}/knowledge_base/
+                    "shared" → shared cross-project KB.
+    """
+
+    def __init__(self, role: str, project_id: str | None = None) -> None:
         self.role = role
-        self._col = _client().get_or_create_collection(
+        self.project_id = project_id
+        path = _resolve_kb_path(project_id)
+        self._col = _client(path).get_or_create_collection(
             name=_collection_name(role),
             metadata={"hnsw:space": "cosine"},
         )

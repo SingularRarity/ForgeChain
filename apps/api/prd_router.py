@@ -38,6 +38,7 @@ router = APIRouter(prefix="/forgechain", tags=["prd"])
 
 class PRDCreateRequest(BaseModel):
     prd: str = Field(..., min_length=50, max_length=20_000, description="Full PRD text")
+    project: Optional[str] = Field(None, description="Project ID; workers load project KB + shared KB")
 
 
 class PRDTaskOut(BaseModel):
@@ -182,11 +183,16 @@ def _serialize_response(graph: TaskGraph, live: dict[str, str]) -> PRDResponse:
     )
 
 
-async def _run_executor(prd_id: str, graph: TaskGraph, redis_url: str) -> None:
+async def _run_executor(
+    prd_id: str,
+    graph: TaskGraph,
+    redis_url: str,
+    project_id: str | None = None,
+) -> None:
     """Background coroutine — runs wave execution, catches all exceptions."""
     try:
         executor = WaveExecutor(redis_url)
-        await executor.execute(graph)
+        await executor.execute(graph, project_id=project_id)
     except Exception:
         logger.exception("[PRD:%s] Background executor crashed", prd_id)
 
@@ -226,14 +232,17 @@ async def create_prd(
     # Persist to Redis
     key = f"forgechain:prd:{prd_id}"
     graph_data = graph.as_dict()
-    await redis.hset(key, mapping={
+    prd_meta: dict = {
         "state":        "planned",
         "current_wave": "0",
         "created_at":   str(graph.created_at),
         "updated_at":   str(graph.created_at),
         "task_job_map": "{}",
         "graph_json":   json.dumps(graph_data),
-    })
+    }
+    if body.project:
+        prd_meta["project"] = body.project
+    await redis.hset(key, mapping=prd_meta)
     await redis.expire(key, 60 * 60 * 24 * 7)  # 7-day TTL
 
     # Cache in-process
@@ -276,8 +285,8 @@ async def execute_prd(
         "task_job_map": "{}",
     })
 
-    # Launch background execution
-    background_tasks.add_task(_run_executor, prd_id, graph, _redis_url())
+    project_id = live.get("project") or None
+    background_tasks.add_task(_run_executor, prd_id, graph, _redis_url(), project_id)
 
     live = await redis.hgetall(f"forgechain:prd:{prd_id}")
     return _serialize_response(graph, live)
