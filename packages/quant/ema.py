@@ -21,12 +21,20 @@ Redis keys:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
 from typing import Any
 
 import redis.asyncio as aioredis
+
+import sys
+for _p in ["/packages", "../../packages"]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from notify import dispatcher as _notifier
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +66,11 @@ class EMATracker:
 
             # Track sustained degradation
             below_since = float(data.get("below_since", 0))
+            just_crossed_below = False
             if new_quality < QUALITY_THRESHOLD:
                 if below_since == 0:
                     below_since = now   # first day below threshold
+                    just_crossed_below = True
             else:
                 below_since = 0         # reset — quality recovered
 
@@ -82,6 +92,20 @@ class EMATracker:
                 role, current_quality, new_quality,
                 "approved" if approved else "rejected",
             )
+
+            if just_crossed_below:
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(_notifier.notify(
+                        "ema_degraded",
+                        role=role,
+                        quality=new_quality,
+                        days_below=0,
+                    ))
+                except RuntimeError:
+                    # No running event loop (e.g. sync Celery context) — skip notification
+                    pass
+
             return new_quality
 
         finally:

@@ -32,6 +32,7 @@ for _p in ["/packages", "../../packages"]:
 from orchestrator import StateMachine, TaskState
 from orchestrator.router import TaskRouter
 from .models import TaskGraph, PRDTask
+from notify import dispatcher as _notifier
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +110,23 @@ class WaveExecutor:
 
                 # Poll until all jobs in this wave reach a terminal state
                 await self._wait_for_wave(redis, wave_job_ids, graph.prd_id, wave.wave_number)
+                asyncio.create_task(_notifier.notify(
+                    "prd_wave_done",
+                    prd_id=graph.prd_id,
+                    wave=wave.wave_number,
+                    total_waves=len(graph.waves),
+                    tasks_in_wave=len(wave_job_ids),
+                ))
 
             await self._set_prd_state(redis, graph.prd_id, "done", current_wave=len(graph.waves))
             logger.info("[PRD:%s] All waves complete", graph.prd_id)
+            total_tasks = sum(len(w.task_ids) for w in graph.waves)
+            asyncio.create_task(_notifier.notify(
+                "prd_done",
+                prd_id=graph.prd_id,
+                total_tasks=total_tasks,
+                project=project_id or "",
+            ))
 
         except Exception as exc:
             logger.exception("[PRD:%s] Execution failed", graph.prd_id)
