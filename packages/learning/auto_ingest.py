@@ -22,6 +22,7 @@ for _p in ["/packages", "../../packages"]:
 from knowledge.chunker import chunk_text, Chunk
 from knowledge.embedder import embed_texts
 from knowledge.store import KnowledgeStore
+from quant.entropy import filter_by_entropy
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,16 @@ class AutoIngestor:
             return 0
 
         store = KnowledgeStore(role)
+
+        # Entropy deduplication — drop near-duplicate chunks before upsert
+        chunks, vectors = filter_by_entropy(chunks, vectors, store)
+        if not chunks:
+            logger.info(
+                "[auto_ingest] All chunks from task %s were near-duplicates — skipped",
+                task_id[:8],
+            )
+            return 0
+
         added = store.add_chunks(chunks, vectors)
 
         logger.info(

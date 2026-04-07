@@ -20,6 +20,14 @@ import redis.asyncio as aioredis
 from .example_store import ExampleStore, Example
 from .auto_ingest import AutoIngestor
 
+import sys
+for _p in ["/packages", "../../packages"]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from quant.bandit import BanditRouter
+from quant.ema import EMATracker
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +38,8 @@ class Collector:
         self._redis_url = redis_url
         self._store = ExampleStore(redis_url)
         self._ingestor = AutoIngestor()
+        self._bandit = BanditRouter(redis_url)
+        self._ema = EMATracker(redis_url)
 
     async def on_approved(self, task_id: str) -> None:
         """Build a positive example from an approved task, persist + ingest into KB."""
@@ -65,6 +75,13 @@ class Collector:
             "[collector] Saved POSITIVE example task=%s role=%s tier=%s",
             task_id[:8], role, tier,
         )
+
+        # Quant: record approval to bandit (α++) and EMA
+        try:
+            self._bandit.record_outcome(role, tier, approved=True)
+            await self._ema.update(role, approved=True)
+        except Exception:
+            logger.debug("[collector] Quant update failed on approval", exc_info=True)
 
         # Auto-ingest approved patch back into the role's ChromaDB KB
         if patch:
@@ -109,6 +126,13 @@ class Collector:
             "[collector] Saved NEGATIVE example task=%s role=%s tier=%s reason=%r",
             task_id[:8], role, tier, rejection_reason[:80],
         )
+
+        # Quant: record rejection to bandit (β++) and EMA
+        try:
+            self._bandit.record_outcome(role, tier, approved=False)
+            await self._ema.update(role, approved=False)
+        except Exception:
+            logger.debug("[collector] Quant update failed on rejection", exc_info=True)
 
     # ------------------------------------------------------------------
 

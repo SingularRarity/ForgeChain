@@ -82,14 +82,38 @@ class TierRoute:
 
 
 def get_route(role: str, tier: Optional[Tier] = None) -> TierRoute:
-    """Resolve (role, tier?) → TierRoute with provider + model."""
-    resolved_tier: Tier = tier or ROLE_BASE_TIER.get(role, "mid")
-    # Allow env-var overrides per tier: FORGECHAIN_JUNIOR_MODEL=codellama etc.
+    """Resolve (role, tier?) → TierRoute with provider + model.
+
+    When tier is not explicitly overridden and FORGECHAIN_USE_BANDIT=1,
+    the tier is sampled from a Thompson Sampling bandit rather than read
+    from the static ROLE_BASE_TIER map.
+    """
+    if tier is None:
+        resolved_tier: Tier = _bandit_tier(role)
+    else:
+        # Allow env-var overrides per tier: FORGECHAIN_JUNIOR_MODEL=codellama etc.
     env_prefix = f"FORGECHAIN_{resolved_tier.upper()}"
     default_provider, default_model = TIER_DEFAULTS[resolved_tier]
     provider = os.getenv(f"{env_prefix}_PROVIDER", default_provider)
     model    = os.getenv(f"{env_prefix}_MODEL",    default_model)
     return TierRoute(tier=resolved_tier, provider=provider, model=model)
+
+
+def _bandit_tier(role: str) -> Tier:
+    """Return tier from bandit if enabled, else fall back to static map."""
+    if os.getenv("FORGECHAIN_USE_BANDIT", "0") == "1":
+        try:
+            redis_url = os.environ["REDIS_URL"]
+            # Import here to avoid circular dep at module load time
+            import sys
+            for _p in ["/packages", "../../packages"]:
+                if _p not in sys.path:
+                    sys.path.insert(0, _p)
+            from quant.bandit import BanditRouter
+            return BanditRouter(redis_url).get_tier(role)  # type: ignore[return-value]
+        except Exception:
+            pass  # fall through to static routing
+    return ROLE_BASE_TIER.get(role, "mid")
 
 
 # ── Provider instantiation per route ────────────────────────────────────── #

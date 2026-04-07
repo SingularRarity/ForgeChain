@@ -27,6 +27,9 @@ from orchestrator import TaskRouter, StateMachine, TaskState
 from providers.token_ledger import TokenLedger
 from providers.pricing import TIER_DEFAULTS, calculate_cost
 from learning.collector import Collector
+from quant.coverage import CoverageTracker
+from quant.ema import EMATracker
+from quant.bandit import BanditRouter
 
 router = APIRouter(prefix="/forgechain", tags=["forgechain"])
 
@@ -323,3 +326,60 @@ async def request_cto_review(
 
     data = await sm.get(task_id)
     return _serialize_job(data or {})
+
+
+# ---------------------------------------------------------------------------
+# Quant Layer — knowledge gaps + worker health
+# ---------------------------------------------------------------------------
+
+@router.get("/knowledge/gaps")
+async def get_knowledge_gaps(
+    min_queries: int = 5,
+) -> dict:
+    """Surface roles with low average retrieval scores — these need more KB ingestion.
+
+    A role below the coverage threshold (default 0.25) means agents working on
+    that role are generating patches without relevant documentation context.
+
+    Returns roles sorted by worst coverage first with ingestion recommendations.
+    """
+    tracker = CoverageTracker(_redis_url())
+    gaps = await tracker.get_gaps(min_queries=min_queries)
+    all_scores = await tracker.get_all_scores()
+    return {
+        "gaps": gaps,
+        "all_scores": all_scores,
+        "threshold": float(os.getenv("FORGECHAIN_COVERAGE_GAP_THRESHOLD", "0.25")),
+    }
+
+
+@router.get("/health/workers")
+async def get_worker_health() -> dict:
+    """Return EMA quality scores and degradation alerts per role.
+
+    A role is flagged as degraded when its approval rate EMA drops below
+    0.6 for 7 or more consecutive days. Degraded roles receive a recommendation
+    to run GET /forgechain/knowledge/gaps.
+
+    Also returns current bandit stats (α/β counts per role/tier) when
+    FORGECHAIN_USE_BANDIT=1.
+    """
+    ema = EMATracker(_redis_url())
+    health = await ema.get_all_health()
+
+    degraded = [r for r, h in health.items() if h["degraded"]]
+
+    response: dict = {
+        "workers": health,
+        "degraded_roles": degraded,
+        "alert": (
+            f"{len(degraded)} role(s) degraded: {', '.join(degraded)}. "
+            "Check GET /forgechain/knowledge/gaps."
+        ) if degraded else None,
+    }
+
+    if os.getenv("FORGECHAIN_USE_BANDIT", "0") == "1":
+        bandit = BanditRouter(_redis_url())
+        response["bandit_stats"] = bandit.get_stats()
+
+    return response
