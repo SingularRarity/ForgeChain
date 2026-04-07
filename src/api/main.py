@@ -8,6 +8,12 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import sys
+# ForgeChain packages (injected at /packages in Docker, or relative in dev)
+for _extra in ["/packages", "/app/forgechain"]:
+    if _extra not in sys.path:
+        sys.path.insert(0, _extra)
+
 from config import settings
 from routers import (
     health,
@@ -21,6 +27,13 @@ from routers import (
 )
 from services import RedisService, TaskService, QueueService, HealthService
 import services  # Import the module to modify globals
+
+# ForgeChain router (optional: only loads if packages are available)
+try:
+    from forgechain.forgechain_router import router as forgechain_router
+    _FORGECHAIN_ENABLED = True
+except ImportError:
+    _FORGECHAIN_ENABLED = False
 
 
 # Create Celery app for worker communication (broadcast commands)
@@ -148,6 +161,9 @@ app.include_router(queues.router)
 app.include_router(workers.router)
 app.include_router(redis.router)  # Redis monitoring endpoints
 app.include_router(openrouter.router)  # OpenRouter monitoring endpoints
+
+if _FORGECHAIN_ENABLED:
+    app.include_router(forgechain_router)
 
 
 @app.get("/")
