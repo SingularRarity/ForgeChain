@@ -9,6 +9,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.0] — 2026-04-08 — Feedback Loop (Phase 2)
+
+### Added
+- `packages/learning/` — full feedback pipeline:
+  - `collector.py` — `Collector.on_approved()` / `on_rejected()`: reads task
+    metadata from Redis, builds a typed `Example`, persists it, and (on
+    approval) triggers auto-ingestion of the patch into ChromaDB.
+  - `example_store.py` — `ExampleStore`: dual-writes examples to a Redis list
+    `forgechain:examples:{role}_{tier}` (fast trainer reads, last 500 per pair,
+    30-day TTL) and Postgres `fc_examples` (durable audit trail). `get_examples()`
+    filters by outcome for trainer consumption.
+  - `trainer.py` — `Trainer.run_all()` / `run_one()`: loads approved examples,
+    converts to `dspy.Example` objects, runs `BootstrapFewShot` (no LLM calls —
+    fast nightly execution), saves compiled weights to
+    `$FORGECHAIN_WEIGHTS_DIR/{role}_{tier}.json`. Skips (role, tier) pairs with
+    fewer than `MIN_EXAMPLES` (default 10). Records last-run timestamp in Redis.
+  - `auto_ingest.py` — `AutoIngestor.ingest()`: formats approved patch as a
+    markdown document, chunks via existing `chunk_text()`, embeds via Ollama
+    `nomic-embed-text`, upserts into the role's ChromaDB collection. Source key
+    `patch:{task_id}` allows targeted deletion if a patch is later invalidated.
+- `apps/workers/feedback_worker.py` — Celery beat task `forgechain_feedback_train`
+  scheduled at 02:00 UTC nightly. Also runnable standalone:
+  `python feedback_worker.py`. Logs trained/skipped summary per run.
+- `infra/init.sql` — `fc_examples` table with indexes on `(role, tier)`,
+  `outcome`, and `recorded_at`.
+
+### Changed
+- `apps/api/forgechain_router.py` — `approve_job` now calls
+  `Collector.on_approved()` after state transitions. `reject_job` calls
+  `Collector.on_rejected()`. Both are fire-and-forget (exceptions never block
+  the human reviewer's response).
+
+### Why
+Workers already hot-load weights from `$FORGECHAIN_WEIGHTS_DIR/{role}_{tier}.json`
+on every task (`modules.py`). The feedback loop writes to that path nightly,
+so every approved PR makes the next similar task more likely to be approved
+on the first attempt — without any manual prompt tuning.
+
+---
+
 ## [0.7.0] — 2026-04-07 — PRD Engine (Phase 1)
 
 ### Added

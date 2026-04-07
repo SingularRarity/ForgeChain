@@ -38,6 +38,26 @@ CREATE INDEX IF NOT EXISTS idx_fc_ledger_tier    ON fc_token_ledger(tier);
 CREATE INDEX IF NOT EXISTS idx_fc_ledger_provider ON fc_token_ledger(provider);
 CREATE INDEX IF NOT EXISTS idx_fc_ledger_recorded ON fc_token_ledger(recorded_at DESC);
 
+-- Training examples (feedback loop — approved/rejected PR outcomes)
+CREATE TABLE IF NOT EXISTS fc_examples (
+    entry_id          UUID        PRIMARY KEY,
+    task_id           UUID        NOT NULL,
+    role              VARCHAR(40) NOT NULL,
+    tier              VARCHAR(10) NOT NULL,
+    task_description  TEXT,
+    role_context      VARCHAR(200),
+    patch             TEXT,
+    reasoning         TEXT,
+    confidence        VARCHAR(10),  -- high | low
+    outcome           VARCHAR(10) NOT NULL,  -- approved | rejected
+    rejection_reason  TEXT,
+    recorded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_fc_examples_role_tier  ON fc_examples(role, tier);
+CREATE INDEX IF NOT EXISTS idx_fc_examples_outcome    ON fc_examples(outcome);
+CREATE INDEX IF NOT EXISTS idx_fc_examples_recorded   ON fc_examples(recorded_at DESC);
+
 -- Patch storage (for jobs where patches exceed Redis memory budget)
 CREATE TABLE IF NOT EXISTS fc_patch (
     task_id    UUID PRIMARY KEY,

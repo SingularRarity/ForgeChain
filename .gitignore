@@ -335,3 +335,6 @@ settings.local.*
 
 frontend/images
 utils/test_api_results.json
+
+# Local Docs
+local_docs/
