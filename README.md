@@ -1,4 +1,137 @@
-# AsyncTaskFlow
+# ForgeChain — AI Coding Bot Army
+
+Built on **AsyncTaskFlow** (FastAPI + Redis + Celery + React dashboard).
+
+Adds a fleet of role-specific LLM agents that accept coding jobs, produce unified-diff patches, open GitHub PRs, and wait for human approval before merging.
+
+---
+
+## Architecture
+
+```
+Browser / API Client
+       │
+       ▼
+FastAPI  (/forgechain/jobs)
+       │
+       ▼
+Redis queues  (forgechain:{role})
+       │
+       ▼
+Role Workers  (Celery tasks per role)
+  frontend_dev · backend_dev · qa_backend
+  db_eng · ai_eng · sre · ba
+       │
+       ▼
+LLM Provider  (Anthropic / Gemini / Grok / Ollama)
+       │
+       ▼
+GitHub PR  (read + create; human approves)
+       │
+       ▼
+State Machine  (pending→running→review→approved→done)
+```
+
+## 5-Step Migration Plan
+
+### Step 1 — Clone and smoke-test base
+```bash
+git clone https://github.com/rjalexa/fastapi-async.git forgechain
+cd forgechain
+cp .env.example .env   # fill in REDIS_URL, OPENROUTER_API_KEY
+docker compose up redis api worker frontend
+# Verify: http://localhost:3000 shows dashboard
+```
+
+### Step 2 — Add secrets and generate vault key
+```bash
+# In .env:
+FORGECHAIN_LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+GITHUB_TOKEN=ghp_...
+GITHUB_REPO=your-org/your-repo
+# Generate vault encryption key:
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# → paste result as FORGECHAIN_VAULT_KEY=...
+```
+
+### Step 3 — Install packages and spin up prod stack
+```bash
+docker compose -f infra/docker-compose.prod.yml up --build -d
+# Postgres initialises via infra/init.sql
+# OTEL collector starts on :4317
+```
+
+### Step 4 — Submit your first job
+```bash
+curl -s -X POST http://localhost:8000/forgechain/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"description":"Add a /ping endpoint to the FastAPI app that returns {\"ok\":true}","role":"backend_dev"}' \
+  | jq .
+# Note the task_id; poll GET /forgechain/jobs/{id} for state
+```
+
+### Step 5 — Approve or reject the PR
+```bash
+# When state == "review":
+curl -s -X POST http://localhost:8000/forgechain/jobs/{task_id}/approve \
+  -H "Content-Type: application/json" \
+  -d '{"reviewer":"your-name","comment":"LGTM"}'
+```
+
+---
+
+## File Tree (ForgeChain additions)
+
+```
+apps/
+├── api/
+│   └── forgechain_router.py   # New FastAPI routes
+├── workers/
+│   ├── base_worker.py         # LLM call + PII + GitHub PR
+│   ├── pyproject.toml
+│   ├── frontend_dev/worker.py
+│   ├── backend_dev/worker.py
+│   ├── qa_backend/worker.py
+│   ├── db_eng/worker.py
+│   ├── ai_eng/worker.py
+│   ├── sre/worker.py
+│   └── ba/worker.py
+└── console/
+    └── src/components/
+        ├── TaskCreateForm.tsx  # Job intake form
+        ├── DiffViewer.tsx      # Patch preview
+        └── PRApproval.tsx      # Approve / reject buttons
+
+packages/
+├── providers/                  # LLM adapters: Anthropic, Gemini, Grok, Ollama
+├── orchestrator/               # TaskRouter + StateMachine
+├── policy/                     # PIIPolicy + PIIVault (Fernet encryption)
+└── redaction/                  # PII detection and masking
+
+infra/
+├── docker-compose.prod.yml     # Full prod stack (Postgres, OTEL, per-role workers)
+├── Dockerfile.worker           # Shared worker image
+├── init.sql                    # Postgres schema
+└── otel-config.yaml            # OpenTelemetry collector
+```
+
+---
+
+## Security Checklist
+
+- [ ] All API keys in `.env` — never committed to git (`.gitignore` covers `.env`)
+- [ ] `FORGECHAIN_VAULT_KEY` set — PII vault encrypted at rest
+- [ ] `GITHUB_TOKEN` scoped to `repo` read + PR create only — **no merge, no admin**
+- [ ] Branch protection enabled: require PR reviews + status checks + signed commits
+- [ ] Workers run as non-root (`UID=1000`) inside Docker
+- [ ] No raw PII in Redis queues — redaction runs before every LLM prompt
+- [ ] State machine enforces review gate — agents **cannot** auto-merge PRs
+- [ ] Postgres audit log captures every state transition
+
+---
+
+## Original AsyncTaskFlow documentation follows below
 
 **A production-ready, distributed task processing system built with FastAPI, Python, and Redis and a React/Tailwind frontend**
 
