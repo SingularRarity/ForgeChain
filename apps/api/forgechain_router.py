@@ -63,6 +63,7 @@ class JobResponse(BaseModel):
     patch: Optional[str] = None
     cto_verdict: Optional[str] = None
     cto_guidance: Optional[str] = None
+    sandbox_report: Optional[str] = None   # JSON string — SandboxReport.to_json()
     error: Optional[str] = None
 
 
@@ -139,6 +140,7 @@ def _serialize_job(data: dict[str, Any]) -> JobResponse:
         patch=data.get("patch"),
         cto_verdict=data.get("cto_verdict"),
         cto_guidance=data.get("cto_guidance"),
+        sandbox_report=data.get("sandbox_report"),
         error=data.get("error"),
     )
 

@@ -84,6 +84,8 @@ x-fc-worker-common: &fc-worker-common
     - fc_projects:/app/projects      # per-project KB dirs
     - fc_weights:/app/weights        # DSPy weights (hot-loaded by workers)
     - fc_kb:/app/knowledge_base      # global KB
+    - /var/run/docker.sock:/var/run/docker.sock  # Docker socket — needed by sandbox runner
+    - fc_sandbox_screenshots:/app/sandbox_screenshots  # Playwright screenshots
   user: "1000:1000"
   restart: unless-stopped
   tmpfs:
