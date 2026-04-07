@@ -88,6 +88,15 @@ x-fc-worker-common: &fc-worker-common
     - fc_sandbox_screenshots:/app/sandbox_screenshots  # Playwright screenshots
   user: "1000:1000"
   restart: unless-stopped
+  deploy:
+    replicas: 1
+    resources:
+      limits:
+        cpus: "0.50"        # LLM calls are I/O-bound; cap at half a core
+        memory: 512M
+      reservations:
+        cpus: "0.10"
+        memory: 128M
   tmpfs:
     - /tmp:noexec,nosuid,size=100m
   logging:
@@ -171,18 +180,28 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    profiles: [ollama]      # opt-in: docker compose --profile ollama up
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 6G
+        reservations:
+          memory: 2G
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-    # Pull models on first start — runs setup script if present
-    # After stack is up, run: docker compose exec ollama bash infra/ollama/setup_ollama.sh
+    # Start only when local models needed:
+    #   docker compose --profile ollama up -d
+    # Then pull models:
+    #   docker compose exec ollama bash infra/ollama/setup_ollama.sh
 
   # ── API ─────────────────────────────────────────────────────────────────── #
 
@@ -241,7 +260,7 @@ services:
       <<: *worker-full-environment
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     deploy:
-      replicas: ${WORKER_REPLICAS:-3}
+      replicas: ${WORKER_REPLICAS:-1}
       resources:
         limits:
           memory: ${WORKER_MEMORY_LIMIT:-512M}
@@ -285,8 +304,6 @@ services:
       -Q forgechain:backend_dev --loglevel=${LOG_LEVEL:-info}
       --concurrency=${FC_WORKER_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
-    deploy:
-      replicas: ${BACKEND_DEV_REPLICAS:-2}
     labels:
       - "com.forgechain.role=backend_dev"
 
@@ -299,8 +316,6 @@ services:
       -Q forgechain:frontend_dev --loglevel=${LOG_LEVEL:-info}
       --concurrency=${FC_WORKER_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
-    deploy:
-      replicas: ${FRONTEND_DEV_REPLICAS:-2}
     labels:
       - "com.forgechain.role=frontend_dev"
 
@@ -313,8 +328,6 @@ services:
       -Q forgechain:qa_backend --loglevel=${LOG_LEVEL:-info}
       --concurrency=${FC_WORKER_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
-    deploy:
-      replicas: ${QA_BACKEND_REPLICAS:-1}
     labels:
       - "com.forgechain.role=qa_backend"
 
@@ -327,8 +340,6 @@ services:
       -Q forgechain:db_eng --loglevel=${LOG_LEVEL:-info}
       --concurrency=${FC_WORKER_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
-    deploy:
-      replicas: ${DB_ENG_REPLICAS:-1}
     labels:
       - "com.forgechain.role=db_eng"
 
@@ -341,8 +352,6 @@ services:
       -Q forgechain:ai_eng --loglevel=${LOG_LEVEL:-info}
       --concurrency=${FC_WORKER_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
-    deploy:
-      replicas: ${AI_ENG_REPLICAS:-1}
     labels:
       - "com.forgechain.role=ai_eng"
 
@@ -355,8 +364,6 @@ services:
       -Q forgechain:sre --loglevel=${LOG_LEVEL:-info}
       --concurrency=${FC_WORKER_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
-    deploy:
-      replicas: ${SRE_REPLICAS:-1}
     labels:
       - "com.forgechain.role=sre"
 
@@ -369,8 +376,6 @@ services:
       -Q forgechain:ba --loglevel=${LOG_LEVEL:-info}
       --concurrency=${FC_WORKER_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
-    deploy:
-      replicas: ${BA_REPLICAS:-1}
     labels:
       - "com.forgechain.role=ba"
 
