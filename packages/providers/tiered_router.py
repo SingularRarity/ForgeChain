@@ -131,6 +131,7 @@ def build_provider(route: TierRoute) -> BaseLLMProvider:
         "gemini":    "GEMINI_MODEL",
         "grok":      "GROK_MODEL",
         "ollama":    "LOCAL_LLM_MODEL",
+        "kilo":      "KILO_MODEL",
     }.get(route.provider, "")
     old = os.environ.get(model_key)
     os.environ[model_key] = route.model
