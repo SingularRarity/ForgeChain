@@ -437,6 +437,7 @@ volumes:
   redis_data:
   postgres_data:
   ollama_data:
-  fc_projects:   # per-project ChromaDB dirs + skills
-  fc_weights:    # DSPy BootstrapFewShot weights (hot-loaded by workers)
-  fc_kb:         # global knowledge base (ChromaDB)
+  fc_projects:              # per-project ChromaDB dirs + skills
+  fc_weights:               # DSPy BootstrapFewShot weights (hot-loaded by workers)
+  fc_kb:                    # global knowledge base (ChromaDB)
+  fc_sandbox_screenshots:   # Playwright screenshots from sandbox patch validation
