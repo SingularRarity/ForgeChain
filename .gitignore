@@ -182,7 +182,6 @@ coverage/
 *.tsbuildinfo
 
 # Docker
-.dockerignore
 docker-compose.override.yml
 docker-compose.local.yml
 
