@@ -92,8 +92,8 @@ x-fc-worker-common: &fc-worker-common
     replicas: 1
     resources:
       limits:
-        cpus: "0.50"        # LLM calls are I/O-bound; cap at half a core
-        memory: 512M
+        cpus: "${FC_WORKER_CPU_LIMIT:-2.00}"   # headroom for autoscale processes
+        memory: ${FC_WORKER_MEM_LIMIT:-1G}
       reservations:
         cpus: "0.10"
         memory: 128M
@@ -180,27 +180,29 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    profiles: [ollama]      # opt-in: docker compose --profile ollama up
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}         # concurrent requests
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}  # only 1 model in VRAM at a time
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}           # unload after 10 min idle
     deploy:
       resources:
         limits:
-          cpus: "2.00"
-          memory: 6G
+          cpus: "${OLLAMA_CPU_LIMIT:-4.00}"
+          memory: ${OLLAMA_MEM_LIMIT:-8G}
         reservations:
+          cpus: "1.00"
           memory: 2G
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
-    # Start only when local models needed:
-    #   docker compose --profile ollama up -d
-    # Then pull models:
+      start_period: 90s
+    # Pull models after first start:
     #   docker compose exec ollama bash infra/ollama/setup_ollama.sh
 
   # ── API ─────────────────────────────────────────────────────────────────── #
@@ -302,7 +304,7 @@ services:
     command: >
       uv run celery -A workers.backend_dev.worker worker
       -Q forgechain:backend_dev --loglevel=${LOG_LEVEL:-info}
-      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --autoscale=${FC_WORKER_MAX_CONCURRENCY:-4},${FC_WORKER_MIN_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
     labels:
       - "com.forgechain.role=backend_dev"
@@ -314,7 +316,7 @@ services:
     command: >
       uv run celery -A workers.frontend_dev.worker worker
       -Q forgechain:frontend_dev --loglevel=${LOG_LEVEL:-info}
-      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --autoscale=${FC_WORKER_MAX_CONCURRENCY:-4},${FC_WORKER_MIN_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
     labels:
       - "com.forgechain.role=frontend_dev"
@@ -326,7 +328,7 @@ services:
     command: >
       uv run celery -A workers.qa_backend.worker worker
       -Q forgechain:qa_backend --loglevel=${LOG_LEVEL:-info}
-      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --autoscale=${FC_WORKER_MAX_CONCURRENCY:-4},${FC_WORKER_MIN_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
     labels:
       - "com.forgechain.role=qa_backend"
@@ -338,7 +340,7 @@ services:
     command: >
       uv run celery -A workers.db_eng.worker worker
       -Q forgechain:db_eng --loglevel=${LOG_LEVEL:-info}
-      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --autoscale=${FC_WORKER_MAX_CONCURRENCY:-4},${FC_WORKER_MIN_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
     labels:
       - "com.forgechain.role=db_eng"
@@ -350,7 +352,7 @@ services:
     command: >
       uv run celery -A workers.ai_eng.worker worker
       -Q forgechain:ai_eng --loglevel=${LOG_LEVEL:-info}
-      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --autoscale=${FC_WORKER_MAX_CONCURRENCY:-4},${FC_WORKER_MIN_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
     labels:
       - "com.forgechain.role=ai_eng"
@@ -362,7 +364,7 @@ services:
     command: >
       uv run celery -A workers.sre.worker worker
       -Q forgechain:sre --loglevel=${LOG_LEVEL:-info}
-      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --autoscale=${FC_WORKER_MAX_CONCURRENCY:-4},${FC_WORKER_MIN_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
     labels:
       - "com.forgechain.role=sre"
@@ -374,10 +376,44 @@ services:
     command: >
       uv run celery -A workers.ba.worker worker
       -Q forgechain:ba --loglevel=${LOG_LEVEL:-info}
-      --concurrency=${FC_WORKER_CONCURRENCY:-1}
+      --autoscale=${FC_WORKER_MAX_CONCURRENCY:-4},${FC_WORKER_MIN_CONCURRENCY:-1}
       --max-tasks-per-child=${FC_MAX_TASKS_PER_CHILD:-50}
     labels:
       - "com.forgechain.role=ba"
+
+  # ── Queue-depth auto-scaler ─────────────────────────────────────────────── #
+
+  fc-scaler:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.scaler
+    environment:
+      REDIS_URL: ${REDIS_URL}
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-forgechain}
+      FC_SCALER_INTERVAL: ${FC_SCALER_INTERVAL:-20}
+      FC_SCALER_UP_THRESHOLD: ${FC_SCALER_UP_THRESHOLD:-2}
+      FC_SCALER_DOWN_COOLDOWN: ${FC_SCALER_DOWN_COOLDOWN:-180}
+      # Per-role max replicas (container-level ceiling)
+      FC_SCALER_MAX_BACKEND_DEV: ${FC_SCALER_MAX_BACKEND_DEV:-4}
+      FC_SCALER_MAX_FRONTEND_DEV: ${FC_SCALER_MAX_FRONTEND_DEV:-3}
+      FC_SCALER_MAX_QA_BACKEND: ${FC_SCALER_MAX_QA_BACKEND:-3}
+      FC_SCALER_MAX_DB_ENG: ${FC_SCALER_MAX_DB_ENG:-2}
+      FC_SCALER_MAX_AI_ENG: ${FC_SCALER_MAX_AI_ENG:-2}
+      FC_SCALER_MAX_SRE: ${FC_SCALER_MAX_SRE:-2}
+      FC_SCALER_MAX_BA: ${FC_SCALER_MAX_BA:-2}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "com.forgechain.service=scaler"
 
   # ── Feedback worker (nightly DSPy training beat) ─────────────────────────── #
 
