@@ -50,6 +50,13 @@ try:
 except ImportError:
     _REGISTRY_ENABLED = False
 
+# Project Onboarding router (optional)
+try:
+    from onboard_router import router as onboard_router
+    _ONBOARD_ENABLED = True
+except ImportError:
+    _ONBOARD_ENABLED = False
+
 
 # Create Celery app for worker communication (broadcast commands)
 from celery import Celery
@@ -185,6 +192,9 @@ if _PRD_ENABLED:
 
 if _REGISTRY_ENABLED:
     app.include_router(registry_router)
+
+if _ONBOARD_ENABLED:
+    app.include_router(onboard_router)
 
 
 @app.get("/")
