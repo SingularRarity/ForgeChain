@@ -14,6 +14,7 @@ class AgentRole(str, Enum):
     AI_ENG = "ai_eng"
     SRE = "sre"
     BA = "ba"
+    SOLIDITY_DEV = "solidity_dev"
 
 
 class RouteResult(NamedTuple):
@@ -25,6 +26,11 @@ class RouteResult(NamedTuple):
 # Keyword → role heuristics (cheapest routing; replace with an LLM classifier
 # or explicit task metadata for production).
 _KEYWORD_MAP: list[tuple[list[str], AgentRole]] = [
+    # Solidity first — highest specificity, must not fall through to backend_dev
+    (["solidity", "sol", "contract", "evm", "web3", "abi", "hardhat", "foundry",
+      "erc20", "erc721", "erc1155", "reentrancy", "escrow", "on-chain", "onchain",
+      "blockchain", "carbon credit", "pledge", "dao", "governance", "smart contract",
+      "wei", "gwei", "payable", "emit", "modifier", "mapping("], AgentRole.SOLIDITY_DEV),
     (["react", "css", "tsx", "html", "ui", "frontend", "component", "tailwind"], AgentRole.FRONTEND_DEV),
     (["fastapi", "django", "flask", "api", "endpoint", "backend", "python"], AgentRole.BACKEND_DEV),
     (["test", "pytest", "coverage", "qa", "unit test", "integration test"], AgentRole.QA_BACKEND),

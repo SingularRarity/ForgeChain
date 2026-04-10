@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 _WEIGHTS_DIR = Path(os.getenv("FORGECHAIN_WEIGHTS_DIR", "/app/dspy_weights"))
 MIN_EXAMPLES = int(os.getenv("FORGECHAIN_MIN_TRAIN_EXAMPLES", "10"))
 
-_ALL_ROLES = ["backend_dev", "frontend_dev", "db_eng", "qa_backend", "ai_eng", "sre", "ba"]
+_ALL_ROLES = ["backend_dev", "frontend_dev", "db_eng", "qa_backend", "ai_eng", "sre", "ba", "solidity_dev"]
 _ALL_TIERS = ["junior", "mid", "senior"]   # cto excluded — never auto-trained
 
 

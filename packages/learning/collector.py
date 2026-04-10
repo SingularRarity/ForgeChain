@@ -149,12 +149,13 @@ class Collector:
 
 def _role_context(role: str) -> str:
     _MAP = {
-        "backend_dev":  "Python/FastAPI backend engineer",
-        "frontend_dev": "React/TypeScript frontend engineer",
-        "db_eng":       "PostgreSQL database engineer",
-        "qa_backend":   "Backend QA / pytest specialist",
-        "ai_eng":       "ML/AI engineer (PyTorch, HuggingFace)",
-        "sre":          "Site reliability / DevOps engineer",
-        "ba":           "Business analyst / requirements engineer",
+        "backend_dev":   "Python/FastAPI backend engineer",
+        "frontend_dev":  "React/TypeScript frontend engineer",
+        "db_eng":        "PostgreSQL database engineer",
+        "qa_backend":    "Backend QA / pytest specialist",
+        "ai_eng":        "ML/AI engineer (PyTorch, HuggingFace)",
+        "sre":           "Site reliability / DevOps engineer",
+        "ba":            "Business analyst / requirements engineer",
+        "solidity_dev":  "Solidity/EVM smart contract engineer — safe, gas-optimized, Foundry-tested",
     }
     return _MAP.get(role, f"Software engineer — {role}")
