@@ -56,8 +56,10 @@ class BaseWorker(ABC):
         self._ledger    = TokenLedger(self._redis_url)
         self._retriever = Retriever(self.role)
         # Global fallbacks — overridden per-project at task run time via registry
-        self._github_token = os.getenv("GITHUB_TOKEN", "")
-        self._repo_name    = os.getenv("GITHUB_REPO", "")
+        self._github_token   = os.getenv("GITHUB_TOKEN", "")
+        self._repo_name      = os.getenv("GITHUB_REPO", "")
+        # Branch workers open PRs against. Defaults to "dev" so main is always human-gated.
+        self._target_branch  = os.getenv("FORGECHAIN_TARGET_BRANCH", "dev")
 
     # ------------------------------------------------------------------ #
     # Subclass contract                                                    #
@@ -389,8 +391,18 @@ class BaseWorker(ABC):
             gh   = Github(token)
             repo = gh.get_repo(repo_name)
             branch = f"forgechain/{self.role}/{task_id[:8]}"
-            base_sha = repo.get_branch(repo.default_branch).commit.sha
-            repo.create_git_ref(ref=f"refs/heads/{branch}", sha=base_sha)
+            # Target the configured base branch; fall back to repo default if it doesn't exist
+            try:
+                base_ref = repo.get_branch(self._target_branch)
+                base_branch_name = self._target_branch
+            except GithubException:
+                base_ref = repo.get_branch(repo.default_branch)
+                base_branch_name = repo.default_branch
+                logger.warning(
+                    "[%s] Branch %r not found — falling back to %r",
+                    self.role, self._target_branch, base_branch_name,
+                )
+            repo.create_git_ref(ref=f"refs/heads/{branch}", sha=base_ref.commit.sha)
             repo.create_file(
                 path=f"patches/{task_id}.patch",
                 message=f"chore(forgechain): {self.role} patch {task_id[:8]}",
@@ -404,10 +416,11 @@ class BaseWorker(ABC):
                     f"provider `{route.provider}/{route.model}`\n\n"
                     f"Task: `{task_id}`\n\n"
                     f"```diff\n{patch[:3000]}\n```\n\n"
-                    f"> Requires human approval — agents cannot merge."
+                    f"> Auto-generated. Merge into `{base_branch_name}` — "
+                    f"then open a PR from `{base_branch_name}` → `main` for human review."
                 ),
                 head=branch,
-                base=repo.default_branch,
+                base=base_branch_name,
                 draft=True,
             )
             return pr.html_url
